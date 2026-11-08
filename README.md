@@ -67,7 +67,7 @@ Scarlet and Violet keep their data in one large archive. The randomizer decrypts
 - **Gimmighoul stays vanilla.** Changing the roaming and chest Gimmighoul crashes the game's scripts, so the randomizer leaves them and their battles alone.
 - **Shops of the same kind share one list.** Every Pokémon Center sells the same items, and so does every bakery. The game assigns one item list per kind of shop.
 - **Only species that are in the game.** Pokémon that Scarlet and Violet don't include can't be added, because the game has no models for them.
-- **In-game testing.** The early game, starters, trainers, shops and the scripted battle in the catching lesson are checked in playthroughs. Many other options are verified against the game data by automated tests but not yet in a full playthrough. If something breaks, please open an issue with your settings code and seed.
+- **In-game testing.** The early game, starters, trainers, shops, some titans, Team Star base, and the scripted battle in the catching lesson are checked in playthroughs. Many other options are verified against the game data by automated tests but not yet in a full playthrough. If something breaks, please open an issue with your settings code and seed.
 
 ## Building from source
 
