@@ -1,0 +1,6 @@
+references/
+target/
+node_modules/
+dist/
+*.log
+.svr-test/

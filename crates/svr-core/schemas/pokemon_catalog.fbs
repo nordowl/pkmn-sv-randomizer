@@ -1,0 +1,41 @@
+// pokemon/catalog/catalog/poke_resource_table.trpmcatalog: which species and forms have model assets.
+file_extension "trpmcatalog";
+
+table CatalogVersion {
+    Version: uint;
+}
+
+table CatalogSpecies {
+    SpeciesInternal: ushort;
+    Form: ushort;
+    Gender: ubyte;
+}
+
+table CatalogAnimation {
+    Form: ushort;
+    Path: string;
+}
+
+table CatalogLocator {
+    Form: ushort;
+    Index: ubyte;
+    Path: string;
+}
+
+table CatalogEntry {
+    Info: CatalogSpecies (required);
+    ModelPath: string (required);
+    MaterialTablePath: string (required);
+    ConfigPath: string (required);
+    Animations: [CatalogAnimation] (required);
+    Locators: [CatalogLocator] (required);
+    IconPath: string (required);
+    Field07: uint;
+}
+
+table PokemonCatalog {
+    Version: CatalogVersion (required);
+    Table: [CatalogEntry] (required);
+}
+
+root_type PokemonCatalog;

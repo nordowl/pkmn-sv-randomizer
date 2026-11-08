@@ -1,0 +1,382 @@
+//! A randomize run: one seed or a batch, written into seed folders, reported through events.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use svr_core::output::{write_mod, SeedMeta};
+use svr_core::rando::options::{OptionDef, Settings};
+use svr_core::rando::{self, Seed};
+
+use crate::config::AppConfig;
+use crate::describe::describe_changes;
+use crate::edition::Edition;
+use crate::errors::{io_failure, sentence};
+use crate::games::OpenedGame;
+use crate::library::free_folder;
+use crate::settings::file_bytes;
+use crate::spoiler;
+
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_BATCH: u32 = 999;
+const MAX_NAME_CHARS: usize = 80;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RandomizeRequest {
+    pub edition: Edition,
+    pub settings: Settings,
+    pub seed: String,
+    pub batch: Option<BatchRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BatchRequest {
+    pub count: u32,
+    pub prefix: String,
+    pub start_index: u32,
+    pub output_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeedStage {
+    Randomizing,
+    Writing,
+    Logging,
+}
+
+/// `position` counts seeds in this run from 0.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RandoEvent {
+    Started {
+        total: u32,
+    },
+    SeedStarted {
+        position: u32,
+        name: String,
+        seed: String,
+    },
+    SeedStage {
+        position: u32,
+        stage: SeedStage,
+    },
+    SeedDone {
+        position: u32,
+        name: String,
+        seed: String,
+        folder: PathBuf,
+        warnings: Vec<String>,
+        millis: u64,
+    },
+    SeedFailed {
+        position: u32,
+        name: String,
+        seed: String,
+        error: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JobSummary {
+    pub total: u32,
+    pub done: u32,
+    pub failed: u32,
+    pub cancelled: bool,
+    pub folders: Vec<PathBuf>,
+    pub next_batch_index: u32,
+}
+
+fn validate(request: &RandomizeRequest) -> Result<(), String> {
+    if let Some(batch) = &request.batch {
+        if !(1..=MAX_BATCH).contains(&batch.count) {
+            return Err(format!("A batch makes between 1 and {MAX_BATCH} seeds. Change the number of seeds."));
+        }
+        if batch.prefix.trim().is_empty() {
+            return Err("Give the batch a name, for example \"Run \", so its seed folders can be told apart.".to_owned());
+        }
+        if batch.start_index.checked_add(batch.count).is_none() {
+            return Err("The batch start number is too large. Choose a smaller one.".to_owned());
+        }
+    }
+    Ok(())
+}
+
+/// Windows refuses some characters and names in folders, and core stages each seed folder at
+/// `<name>.partial`, so dots become underscores too.
+fn folder_name(raw: &str) -> String {
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let replaced: String = raw
+        .chars()
+        .map(|c| if c.is_control() || r#"<>:"/\|?*."#.contains(c) { '_' } else { c })
+        .take(MAX_NAME_CHARS)
+        .collect();
+    let mut name = replaced.trim().to_owned();
+    if name.is_empty() {
+        name = "Seed".to_owned();
+    }
+    if RESERVED.iter().any(|reserved| reserved.eq_ignore_ascii_case(&name)) {
+        name.push('_');
+    }
+    name
+}
+
+/// Random seeds are drawn when each seed starts, so seeds made in quick succession still differ.
+enum SeedText {
+    Random,
+    Fixed(String),
+}
+
+struct Planned {
+    seed: SeedText,
+    /// The batch folder name; `None` for a single run, whose name comes from its seed.
+    batch_name: Option<String>,
+}
+
+fn plan(request: &RandomizeRequest) -> Vec<Planned> {
+    let typed = request.seed.trim();
+    let Some(batch) = &request.batch else {
+        let seed = if typed.is_empty() { SeedText::Random } else { SeedText::Fixed(typed.to_owned()) };
+        return vec![Planned { seed, batch_name: None }];
+    };
+    (0..batch.count)
+        .map(|offset| {
+            let index = batch.start_index + offset;
+            Planned {
+                seed: if typed.is_empty() {
+                    SeedText::Random
+                } else {
+                    SeedText::Fixed(format!("{typed}-{index}"))
+                },
+                batch_name: Some(format!("{}{index:03}", batch.prefix.trim_start())),
+            }
+        })
+        .collect()
+}
+
+pub struct JobInput<'a> {
+    pub request: &'a RandomizeRequest,
+    pub game: &'a OpenedGame,
+    pub registry: &'a [OptionDef],
+    pub library_dir: &'a Path,
+    pub next_batch_index: u32,
+}
+
+/// Runs the whole request. Each seed reports `seed_started`, its stages, then `seed_done` or
+/// `seed_failed`; a failed seed does not stop the batch. `cancel` is checked before each seed.
+pub fn run(input: &JobInput, cancel: &AtomicBool, emit: &mut dyn FnMut(RandoEvent)) -> Result<JobSummary, String> {
+    let request = input.request;
+    validate(request)?;
+    if request.edition != input.game.edition {
+        return Err(format!("The loaded game is {}, not {}.", input.game.edition, request.edition));
+    }
+    let root = request
+        .batch
+        .as_ref()
+        .and_then(|batch| batch.output_dir.as_deref())
+        .unwrap_or(input.library_dir);
+    fs::create_dir_all(root).map_err(|e| io_failure("create the output folder", root, &e))?;
+
+    let planned = plan(request);
+    let total = planned.len() as u32;
+    let mut summary = JobSummary {
+        total,
+        done: 0,
+        failed: 0,
+        cancelled: false,
+        folders: Vec::new(),
+        next_batch_index: input.next_batch_index,
+    };
+    emit(RandoEvent::Started { total });
+
+    let mut used_seeds = HashSet::new();
+    for (position, planned) in (0u32..).zip(planned) {
+        if cancel.load(Ordering::SeqCst) {
+            summary.cancelled = true;
+            break;
+        }
+        let seed = match planned.seed {
+            SeedText::Fixed(text) => Seed(text),
+            SeedText::Random => loop {
+                let seed = Seed::random();
+                if !used_seeds.contains(&seed.0) {
+                    break seed;
+                }
+            },
+        };
+        used_seeds.insert(seed.0.clone());
+        let raw_name = planned
+            .batch_name
+            .unwrap_or_else(|| format!("{} {}", request.edition.short_name(), seed.0));
+        let dir = free_folder(root, &folder_name(&raw_name));
+        let name = dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        emit(RandoEvent::SeedStarted {
+            position,
+            name: name.clone(),
+            seed: seed.0.clone(),
+        });
+
+        let started = Instant::now();
+        match make_seed(input, &seed, &dir, &mut |stage| emit(RandoEvent::SeedStage { position, stage })) {
+            Ok(warnings) => {
+                summary.done += 1;
+                summary.folders.push(dir.clone());
+                emit(RandoEvent::SeedDone {
+                    position,
+                    name,
+                    seed: seed.0,
+                    folder: dir,
+                    warnings,
+                    millis: started.elapsed().as_millis() as u64,
+                });
+            }
+            Err(error) => {
+                summary.failed += 1;
+                let _ = fs::remove_dir_all(dir.with_extension("partial"));
+                emit(RandoEvent::SeedFailed {
+                    position,
+                    name,
+                    seed: seed.0,
+                    error,
+                });
+            }
+        }
+    }
+
+    if let Some(batch) = &request.batch {
+        summary.next_batch_index = batch.start_index + summary.done + summary.failed;
+    }
+    Ok(summary)
+}
+
+fn make_seed(
+    input: &JobInput,
+    seed: &Seed,
+    dir: &Path,
+    stage: &mut dyn FnMut(SeedStage),
+) -> Result<Vec<String>, String> {
+    let game = input.game;
+    stage(SeedStage::Randomizing);
+    let output = rando::randomize(&game.files, &input.request.settings, seed.clone())
+        .map_err(|error| format!("The randomizer stopped: {}", sentence(error.to_string())))?;
+
+    stage(SeedStage::Logging);
+    let created = chrono::Local::now();
+    let changes = describe_changes(input.registry, &output.settings, game.species().ok());
+    let created_text = created.format("%Y-%m-%d %H:%M").to_string();
+    let header = spoiler::Header {
+        edition: game.edition,
+        seed: &seed.0,
+        created: &created_text,
+        app_version: APP_VERSION,
+    };
+    let spoiler_text = spoiler::text(&header, &changes, &output.log);
+    let spoiler_html = spoiler::html(&header, &changes, &output.log);
+    let settings_json = file_bytes(&output.settings);
+
+    stage(SeedStage::Writing);
+    let meta = SeedMeta {
+        app_version: APP_VERSION.to_owned(),
+        edition: game.edition.id().to_owned(),
+        title_id: game.edition.title_id_hex(),
+        seed: seed.0.clone(),
+        created_unix: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+        file_count: output.files.len(),
+    };
+    let extras: [(&str, &[u8]); 3] = [
+        ("spoiler.txt", spoiler_text.as_bytes()),
+        ("spoiler.html", spoiler_html.as_bytes()),
+        ("settings.json", &settings_json),
+    ];
+    write_mod(dir, &game.files, &output.files, &meta, &extras)
+        .map_err(|error| format!("Could not save the seed: {}", sentence(error.to_string())))?;
+    Ok(output.warnings)
+}
+
+/// Remembers where the next batch starts and any batch folder outside the library.
+pub fn record_batch(config: &mut AppConfig, request: &RandomizeRequest, summary: &JobSummary, library_dir: &Path) {
+    let Some(batch) = &request.batch else {
+        return;
+    };
+    config.next_batch_index = summary.next_batch_index;
+    if let Some(dir) = &batch.output_dir {
+        if dir != library_dir && !config.extra_seed_dirs.contains(dir) {
+            config.extra_seed_dirs.push(dir.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(seed: &str, batch: Option<BatchRequest>) -> RandomizeRequest {
+        RandomizeRequest {
+            edition: Edition::Scarlet,
+            settings: Settings::default(),
+            seed: seed.to_owned(),
+            batch,
+        }
+    }
+
+    fn batch(count: u32, prefix: &str) -> BatchRequest {
+        BatchRequest {
+            count,
+            prefix: prefix.to_owned(),
+            start_index: 7,
+            output_dir: None,
+        }
+    }
+
+    #[test]
+    fn names_are_safe_for_windows() {
+        assert_eq!(folder_name("Scarlet a/b:c?.d"), "Scarlet a_b_c__d");
+        assert_eq!(folder_name("  "), "Seed");
+        assert_eq!(folder_name("con"), "con_");
+        assert_eq!(folder_name(&"x".repeat(200)).chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn batches_number_their_seeds_and_folders() {
+        let planned = plan(&request(" hello ", Some(batch(3, "Run "))));
+        let names: Vec<_> = planned.iter().map(|p| p.batch_name.clone().unwrap()).collect();
+        assert_eq!(names, ["Run 007", "Run 008", "Run 009"]);
+        assert!(matches!(&planned[2].seed, SeedText::Fixed(text) if text == "hello-9"));
+        assert!(matches!(plan(&request("", Some(batch(1, "B"))))[0].seed, SeedText::Random));
+        assert!(matches!(&plan(&request("abc", None))[0].seed, SeedText::Fixed(text) if text == "abc"));
+    }
+
+    #[test]
+    fn bad_batches_are_refused_plainly() {
+        assert!(validate(&request("", Some(batch(0, "Run ")))).is_err());
+        assert!(validate(&request("", Some(batch(1000, "Run ")))).is_err());
+        assert!(validate(&request("", Some(batch(5, "   ")))).is_err());
+        assert!(validate(&request("", Some(batch(999, "Run ")))).is_ok());
+        assert!(validate(&request("", None)).is_ok());
+    }
+
+    #[test]
+    fn batches_advance_the_start_index_and_remember_outside_folders() {
+        let mut config = AppConfig::default();
+        let mut request = request("", Some(batch(4, "Run ")));
+        request.batch.as_mut().unwrap().output_dir = Some(PathBuf::from("D:/Batches"));
+        let summary = JobSummary {
+            total: 4,
+            done: 2,
+            failed: 1,
+            cancelled: true,
+            folders: Vec::new(),
+            next_batch_index: 10,
+        };
+        record_batch(&mut config, &request, &summary, Path::new("C:/Library"));
+        record_batch(&mut config, &request, &summary, Path::new("C:/Library"));
+        assert_eq!(config.next_batch_index, 10);
+        assert_eq!(config.extra_seed_dirs, [PathBuf::from("D:/Batches")]);
+    }
+}

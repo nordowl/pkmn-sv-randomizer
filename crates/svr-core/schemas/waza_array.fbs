@@ -1,0 +1,118 @@
+// avalon/data/waza_array.bin on Scarlet/Violet 4.0.0. The game ships no .bfbs for this table.
+// Widths were measured from field spacing and alignment across all 920 rows.
+// tests/fb_tables.rs checks that every row's vtable and every non-zero byte is accounted for.
+
+file_extension "bin";
+
+enum WazaAffinity : byte {
+    None = 0,
+    Support = 3,
+    Self = 4,
+    Attack = 5,
+    Strong = 6,
+    Shuriken = 7,
+}
+
+struct WazaInflict {
+    Value: ushort;
+    Chance: ubyte;
+    Turn1: ubyte;
+    Turn2: ubyte;
+    Turn3: ubyte;
+}
+
+// Grouped per stat, not per column: Close Combat reads 02 ff 64 04 ff 64 00 00 00, which is
+// Defense -1 at 100% and Sp. Def -1 at 100%.
+struct WazaStatAmps {
+    Stat1: byte;
+    Stat1Stage: byte;
+    Stat1Percent: ubyte;
+    Stat2: byte;
+    Stat2Stage: byte;
+    Stat2Percent: ubyte;
+    Stat3: byte;
+    Stat3Stage: byte;
+    Stat3Percent: ubyte;
+}
+
+table Waza {
+    MoveID: ushort;
+    CanUseMove: bool;
+    Type: ubyte;
+    Quality: ubyte;
+    Category: ubyte;
+    Power: ubyte;
+    Accuracy: ubyte;
+    PP: ubyte;
+    Priority: byte;
+    HitMax: ubyte;
+    HitMin: ubyte;
+    Inflict: WazaInflict;
+    CritStage: ubyte;
+    Flinch: ubyte;
+    EffectSequence: ushort;
+    Recoil: byte;
+    RawHealing: byte;
+    RawTarget: ubyte;
+    StatAmps: WazaStatAmps;
+    Affinity: WazaAffinity;
+    Flag_MakesContact: bool;
+    Flag_Charge: bool;
+    Flag_Recharge: bool;
+    Flag_Protect: bool;
+    Flag_Reflectable: bool;
+    Flag_Snatch: bool;
+    Flag_Mirror: bool;
+    Flag_Punch: bool;
+    Flag_Sound: bool;
+    Flag_Dance: bool;
+    Flag_Gravity: bool;
+    Flag_Defrost: bool;
+    Flag_DistanceTriple: bool;
+    Flag_Heal: bool;
+    Flag_IgnoreSubstitute: bool;
+    Flag_FailSkyBattle: bool;
+    Flag_AnimateAlly: bool;
+    Flag_Metronome: bool;
+    Flag_FailEncore: bool;
+    Flag_FailMeFirst: bool;
+    Flag_FutureAttack: bool;
+    Flag_Pressure: bool;
+    Flag_Combo: bool;
+    Flag_NoSleepTalk: bool;
+    Flag_NoAssist: bool;
+    Flag_FailCopycat: bool;
+    Flag_FailMimic: bool;
+    Flag_FailInstruct: bool;
+    Flag_Powder: bool;
+    Flag_Bite: bool;
+    Flag_Bullet: bool;
+    Flag_NoMultiHit: bool;
+    Flag_NoEffectiveness: bool;
+    Flag_SheerForce: bool;
+    Flag_Slicing: bool;
+    Flag_Wind: bool;
+    Unknown_56: bool;
+    Unknown_57: bool;
+    Unknown_58: bool;
+    Unknown_59: bool;
+    Unknown_60: bool;
+    Unused_61: bool;
+    Unused_62: bool;
+    Unused_63: bool;
+    Unused_64: bool;
+    Unused_65: bool;
+    Unused_66: bool;
+    Unused_67: bool;
+    Unused_68: bool;
+    Unused_69: bool;
+    Unused_70: bool;
+    Flag_CantUseTwice: bool;
+    Flag_NoSketch: bool;
+}
+
+table WazaTable {
+    Table: [Waza];
+}
+
+root_type WazaTable;

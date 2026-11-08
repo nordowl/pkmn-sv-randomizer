@@ -1,0 +1,29 @@
+[package]
+name = "svr-app"
+description = "Desktop app for the Scarlet/Violet randomizer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version = "1.89"
+
+[lib]
+name = "svr_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "svr-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+svr-core = { path = "../../crates/svr-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+flate2 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

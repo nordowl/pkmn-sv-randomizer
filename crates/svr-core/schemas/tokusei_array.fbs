@@ -1,0 +1,24 @@
+// avalon/data/tokusei_array.bin on Scarlet/Violet 4.0.0. The game ships no .bfbs for this table.
+// Widths were measured from field spacing and alignment across all 311 rows.
+// tests/fb_tables.rs checks that every row's vtable and every non-zero byte is accounted for.
+
+file_extension "bin";
+
+table Tokusei {
+    // Equal to the row index in every row. It is 2 bytes wide and even-aligned, so it is not a flag.
+    ID: ushort;
+    FailRolePlay: bool;
+    NoReceiver: bool;
+    NoEntrain: bool;
+    NoTrace: bool;
+    FailSkillSwap: bool;
+    CantSuppress: bool;
+    Breakable: bool;
+    NoTransform: bool;
+}
+
+table TokuseiTable {
+    Table: [Tokusei];
+}
+
+root_type TokuseiTable;

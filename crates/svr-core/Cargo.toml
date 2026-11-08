@@ -1,0 +1,18 @@
+[package]
+name = "svr-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+aes = "0.8"
+ctr = "0.9"
+cipher = "0.4"
+xts-mode = "0.5"
+oozextract = "0.5"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
