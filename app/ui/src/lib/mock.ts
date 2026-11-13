@@ -31,6 +31,7 @@ import type {
   SpeciesPick,
   SwitchCheck,
 } from './api';
+import { batchPlan, batchTotal, zipName } from './format';
 
 const scenario = new URLSearchParams(location.search).get('scenario') ?? 'ready';
 
@@ -666,24 +667,35 @@ function randomSeed(): string {
 async function runJob(request: RandomizeRequest, emit: (event: RandoEvent) => void): Promise<JobSummary> {
   const batch = request.batch;
   if (batch) {
-    if (batch.count < 1 || batch.count > 999) throw 'A batch makes between 1 and 999 seeds. Change the number of seeds.';
+    const count = batchTotal(batch);
+    if (count < 1 || count > 999) throw 'A batch makes between 1 and 999 seeds. Change the number of seeds.';
     if (!batch.prefix.trim()) throw 'Give the batch a name, for example "Run ", so its seed folders can be told apart.';
   }
-  readyGame(request.edition);
+  const planned = batch
+    ? batchPlan(batch)
+    : [{ edition: request.edition, index: 0, name: '' }];
+  for (const edition of new Set(planned.map((seed) => seed.edition))) readyGame(edition);
   const root = batch?.output_dir ?? config.library_dir ?? LIBRARY;
   const typed = request.seed.trim();
-  const total = batch ? batch.count : 1;
-  const summary: JobSummary = { total, done: 0, failed: 0, cancelled: false, folders: [], next_batch_index: config.next_batch_index };
+  const total = planned.length;
+  const summary: JobSummary = {
+    total,
+    done: 0,
+    failed: 0,
+    cancelled: false,
+    folders: [],
+    next_batch_index: config.next_batch_index,
+    zip: null,
+  };
   emit({ kind: 'started', total });
 
-  for (let position = 0; position < total; position++) {
+  for (const [position, plan] of planned.entries()) {
     if (cancelled) {
       summary.cancelled = true;
       break;
     }
-    const index = (batch?.start_index ?? 0) + position;
-    const seed = typed ? (batch ? `${typed}-${index}` : typed) : randomSeed();
-    const name = batch ? `${batch.prefix.trimStart()}${String(index).padStart(3, '0')}` : `${NAME[request.edition]} ${seed}`;
+    const seed = typed ? (batch ? `${typed}-${plan.index}` : typed) : randomSeed();
+    const name = batch ? plan.name : `${NAME[plan.edition]} ${seed}`;
     const started = performance.now();
     emit({ kind: 'seed_started', position, name, seed });
     emit({ kind: 'seed_stage', position, stage: 'randomizing' });
@@ -706,7 +718,7 @@ async function runJob(request: RandomizeRequest, emit: (event: RandoEvent) => vo
     const folder = `${root}\\${name}`;
     summary.done++;
     summary.folders.push(folder);
-    seeds = [seedEntry(root, name, request.edition, seed, 0, 400 + Math.floor(Math.random() * 20)), ...seeds];
+    seeds = [seedEntry(root, name, plan.edition, seed, 0, 400 + Math.floor(Math.random() * 20)), ...seeds];
     emit({ kind: 'seed_done', position, name, seed, folder, warnings: [], millis: Math.round(performance.now() - started) });
   }
 
@@ -716,6 +728,14 @@ async function runJob(request: RandomizeRequest, emit: (event: RandoEvent) => vo
     if (batch.output_dir && batch.output_dir !== (config.library_dir ?? LIBRARY) && !config.extra_seed_dirs.includes(batch.output_dir)) {
       config.extra_seed_dirs.push(batch.output_dir);
     }
+  }
+  const first = summary.folders[0];
+  if (request.zip_dir && first) {
+    const name = (batch && zipName(request)) || `${first.split('\\').pop()}.zip`;
+    const path = `${request.zip_dir}\\${name}`;
+    emit({ kind: 'packing', path });
+    await wait(900);
+    summary.zip = { state: 'done', path };
   }
   return summary;
 }

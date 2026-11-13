@@ -23,6 +23,7 @@ fn kinds(events: &[RandoEvent]) -> Vec<String> {
             RandoEvent::SeedStage { position, stage } => format!("seed_stage {position} {stage:?}"),
             RandoEvent::SeedDone { position, .. } => format!("seed_done {position}"),
             RandoEvent::SeedFailed { position, error, .. } => format!("seed_failed {position}: {error}"),
+            RandoEvent::Packing { .. } => "packing".to_owned(),
         })
         .collect()
 }
@@ -33,8 +34,9 @@ fn a_seed_is_written_installed_and_removed() {
         return;
     };
     let keys = Keys::load(&keys).expect("load keys");
-    let scarlet = real_games(&games).scarlet;
-    let game = OpenedGame::open(scarlet.base_xci, scarlet.update_nsp, &keys).expect("open Scarlet");
+    let real = real_games(&games);
+    let game = OpenedGame::open(real.scarlet.base_xci, real.scarlet.update_nsp, &keys).expect("open Scarlet");
+    let violet = OpenedGame::open(real.violet.base_xci, real.violet.update_nsp, &keys).expect("open Violet");
     let registry = rando::registry();
     let temp = TempDir::new("job");
     let library_dir = temp.path().join("library");
@@ -48,10 +50,11 @@ fn a_seed_is_written_installed_and_removed() {
         settings: settings.clone(),
         seed: "svr-app-test".to_owned(),
         batch: None,
+        zip_dir: None,
     };
     let input = JobInput {
         request: &request,
-        game: &game,
+        games: &[&game],
         registry: &registry,
         library_dir: &library_dir,
         next_batch_index: 4,
@@ -104,7 +107,7 @@ fn a_seed_is_written_installed_and_removed() {
     assert_eq!(again.folders, [library_dir.join("Scarlet svr-app-test (2)")]);
     assert!(folder.join("svr-seed.json").is_file(), "the first seed is kept");
 
-    batch_numbering(&game, &registry, temp.path());
+    batch_numbering(&[&game, &violet], &registry, temp.path());
 }
 
 fn install_and_remove(eden: &Path, library_dir: &Path, seed: &Path) {
@@ -138,22 +141,24 @@ fn install_and_remove(eden: &Path, library_dir: &Path, seed: &Path) {
     println!("OK installed into {}, backed up to {}", installed.display(), backup.display());
 }
 
-fn batch_numbering(game: &OpenedGame, registry: &[svr_core::rando::OptionDef], root: &Path) {
+fn batch_numbering(games: &[&OpenedGame], registry: &[svr_core::rando::OptionDef], root: &Path) {
     let output_dir = root.join("batch out");
     let request = RandomizeRequest {
         edition: Edition::Scarlet,
         settings: Settings::defaults(registry),
         seed: "race".to_owned(),
         batch: Some(BatchRequest {
-            count: 2,
+            scarlet: 1,
+            violet: 1,
             prefix: "Race ".to_owned(),
             start_index: 9,
             output_dir: Some(output_dir.clone()),
         }),
+        zip_dir: Some(root.join("zips")),
     };
     let input = JobInput {
         request: &request,
-        game,
+        games,
         registry,
         library_dir: &root.join("library"),
         next_batch_index: 1,
@@ -173,9 +178,14 @@ fn batch_numbering(game: &OpenedGame, registry: &[svr_core::rando::OptionDef], r
         .collect();
     assert_eq!(
         seeds,
-        [("Race 009".to_owned(), "race-9".to_owned()), ("Race 010".to_owned(), "race-10".to_owned())]
+        [
+            ("Race 009 Scarlet".to_owned(), "race-9".to_owned()),
+            ("Race 010 Violet".to_owned(), "race-10".to_owned())
+        ]
     );
     assert_eq!(summary.next_batch_index, 11);
-    assert!(output_dir.join("Race 010").join("svr-seed.json").is_file());
+    let violet_meta = fs::read_to_string(output_dir.join("Race 010 Violet").join("svr-seed.json")).unwrap();
+    assert!(violet_meta.contains("\"violet\""), "{violet_meta}");
+    assert_eq!(summary.zip, Some(job::Packed::Done { path: root.join("zips").join("Race 009-010.zip") }));
     println!("OK batch wrote {:?}", summary.folders);
 }

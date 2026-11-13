@@ -28,7 +28,8 @@
     void app.seed;
     void app.edition;
     void app.view;
-    void { ...app.batch };
+    void { ...app.batch, ...app.batch.counts };
+    void { ...app.zip };
     const timer = setTimeout(() => app.persist(), 300);
     return () => clearTimeout(timer);
   });
@@ -114,9 +115,10 @@
   }
 
   main {
+    --page-top: 34px;
     position: relative;
     overflow-y: auto;
-    padding: 34px 44px 60px;
+    padding: var(--page-top) 44px 60px;
     border-top-left-radius: 18px;
     background: var(--surface);
     box-shadow:

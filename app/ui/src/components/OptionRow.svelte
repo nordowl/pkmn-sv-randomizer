@@ -1,7 +1,9 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import type { OptionDef, OptValue, PoolFilter, SpeciesPick } from '../lib/api';
   import { app } from '../lib/app.svelte';
   import { chosen, firstUnmet, sameValue } from '../lib/options';
+  import { revealOf } from '../lib/reveal.svelte';
   import Icon from './Icon.svelte';
   import PoolEditor from './PoolEditor.svelte';
   import ChoiceCards from './controls/ChoiceCards.svelte';
@@ -12,7 +14,7 @@
   import Toggle from './controls/Toggle.svelte';
   import SpeciesPicker from './species/SpeciesPicker.svelte';
 
-  let { def }: { def: OptionDef } = $props();
+  let { def, tabs }: { def: OptionDef; tabs?: Snippet } = $props();
 
   /** Segmented controls this long move under the text instead of squeezing it. */
   const LONG_SEGMENTS = 34;
@@ -46,23 +48,18 @@
   const set = (next: OptValue) => app.setValue(def.id, next);
 
   let element: HTMLElement | undefined = $state();
-  let flashing = $state(false);
-
-  $effect(() => {
-    const highlight = app.highlight;
-    if (highlight?.id !== def.id || Date.now() - highlight.at > 1500 || !element) return;
-    element.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-    flashing = true;
-    const timer = setTimeout(() => (flashing = false), 1600);
-    return () => clearTimeout(timer);
-  });
+  const reveal = revealOf(
+    () => [def.id],
+    () => element,
+  );
 </script>
 
-<div class="row {layout}" class:off={!!unmet} class:flash={flashing} bind:this={element} id="option-{def.id}">
+<div class="row {layout}" class:off={!!unmet} class:flash={reveal.id !== null} bind:this={element} id="option-{def.id}">
   <div class="text">
     <div class="head">
       {#if changed}<span class="changed" title="Changed from the default"></span>{/if}
       <h3 class="label">{def.label}</h3>
+      {#if tabs}<div class="tabs">{@render tabs()}</div>{/if}
     </div>
     {#if def.help}<p class="help">{def.help}</p>{/if}
     {#if picked?.help}
@@ -169,6 +166,10 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 6px 8px;
+  }
+
+  .tabs {
+    margin: -4px 0 -4px auto;
   }
 
   .label {

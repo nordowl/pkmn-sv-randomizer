@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition';
   import { app, type View } from '../lib/app.svelte';
-  import { changedOn } from '../lib/options';
+  import { changedOn, groupsOf, sectionsOf } from '../lib/options';
   import Icon from './Icon.svelte';
   import SearchBox from './SearchBox.svelte';
 
@@ -11,6 +12,18 @@
       return { ...page, size: options.length, changed: changedOn(options, app.settings.values, catalog) };
     }),
   );
+
+  const sections = $derived(
+    app.view.kind === 'page' ? sectionsOf(groupsOf(catalog.options(app.view.id))) : [],
+  );
+
+  function jump(id: string) {
+    app.section = id;
+    document.getElementById(`section-${id}`)?.scrollIntoView({
+      block: 'start',
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }
 
   const envTrouble = $derived(
     !!app.envError || !!app.env?.keys_error || !!app.env?.games.some((game) => game.state !== 'ready'),
@@ -40,6 +53,21 @@
             <span class="name">{page.title}</span>
             {#if page.changed}<span class="badge num" title="{page.changed} changed from the defaults">{page.changed}</span>{/if}
           </button>
+          {#if sections.length > 1 && isView({ kind: 'page', id: page.id })}
+            <ul class="sections" transition:slide={{ duration: 180 }}>
+              {#each sections as section (section.id)}
+                <li>
+                  <button
+                    class="section"
+                    aria-current={app.section === section.id ? 'location' : undefined}
+                    onclick={() => jump(section.id)}
+                  >
+                    {section.title}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -150,6 +178,53 @@
   .item.quiet:hover,
   .item.quiet[aria-current='page'] {
     color: var(--text-2);
+  }
+
+  .sections {
+    position: relative;
+    margin: 2px 0 6px 18px;
+    padding-left: 10px;
+  }
+  .sections::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 1px;
+    background: var(--line-2);
+  }
+
+  .section {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 27px;
+    padding: 0 10px;
+    overflow: hidden;
+    border-radius: var(--r-s);
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 120ms var(--ease);
+  }
+  .section:hover {
+    color: var(--text);
+  }
+  .section[aria-current='location'] {
+    color: var(--accent-text);
+  }
+  .section[aria-current='location']::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    top: 7px;
+    bottom: 7px;
+    width: 1px;
+    background: var(--accent);
   }
 
   .name {

@@ -7,6 +7,7 @@ pub mod errors;
 pub mod games;
 pub mod job;
 pub mod library;
+pub mod pack;
 pub mod presets;
 pub mod settings;
 pub mod share;

@@ -3,6 +3,7 @@
 
 pub mod dex;
 pub mod facts;
+pub mod item_balls;
 pub mod names;
 pub mod scene;
 pub mod store;

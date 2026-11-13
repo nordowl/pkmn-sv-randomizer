@@ -13,21 +13,42 @@ export const GENERATION_COUNT = 9;
 export type NumberKind = Extract<Kind, { type: 'number' }>;
 export type ChoiceKind = Extract<Kind, { type: 'choice' }>;
 
-export function regionOf(group: string): Region | null {
-  return REGIONS.find((region) => group.startsWith(region)) ?? null;
+/** The region a group or option label names, as in "Kitakami raids" or "Species Kitakami trainers may use". */
+export function regionOf(text: string): Region | null {
+  const words = text.split(' ');
+  return REGIONS.find((region) => words.includes(region)) ?? null;
 }
 
-/** "Sprigatito's slot" names the slot "Sprigatito". Slot groups share one tabbed section. */
-export function slotOf(group: string): string | null {
+/** "Sprigatito's slot" names the slot "Sprigatito". */
+function slotOf(group: string): string | null {
   return /^(.+?)['’]s slot$/.exec(group)?.[1] ?? null;
 }
 
 export interface Group {
   name: string;
-  region: Region | null;
-  slot: string | null;
+  /** How the group is named on its tab when it shares a section. */
+  tab: string;
   options: OptionDef[];
 }
+
+/** One heading on an options page. Consecutive groups that open with the same option, such as the
+ * regions, the starter slots and the trainer groups, are parallel and share one section with a tab each. */
+export interface Section {
+  id: string;
+  title: string;
+  groups: [Group, ...Group[]];
+}
+
+/** How a group's options are laid out, in order. */
+export type Item =
+  | { kind: 'option'; def: OptionDef }
+  /** The same option for each region, such as the trainer pools, shown as one row with a tab per region. */
+  | { kind: 'regional'; defs: [OptionDef, ...OptionDef[]] }
+  /** Three or more plain switches that share one description, such as the star tiers, shown as one row of cards. */
+  | { kind: 'switches'; help: string; defs: OptionDef[] }
+  /** Three or more switches in a row that each unlock the options after them, such as the scripted
+   * battle groups, shown with a tab per switch. Each part is the switch and what it unlocks. */
+  | { kind: 'switched'; parts: [OptionDef, ...OptionDef[]][] };
 
 /** Lookups over the registry, built once per registry. */
 export class Catalog {
@@ -72,12 +93,85 @@ export function groupsOf(options: OptionDef[]): Group[] {
   for (const def of options) {
     let group = groups.find((g) => g.name === def.group);
     if (!group) {
-      group = { name: def.group, region: regionOf(def.group), slot: slotOf(def.group), options: [] };
+      const tab = slotOf(def.group) ?? regionOf(def.group) ?? def.group;
+      group = { name: def.group, tab, options: [] };
       groups.push(group);
     }
     group.options.push(def);
   }
   return groups;
+}
+
+export function sectionsOf(groups: Group[]): Section[] {
+  const runs: [Group, ...Group[]][] = [];
+  for (const group of groups) {
+    const run = runs.at(-1);
+    if (run && run[0].options[0]?.label === group.options[0]?.label) run.push(group);
+    else runs.push([group]);
+  }
+  return runs.map((groups) => ({ id: slug(groups[0].name), title: sectionTitle(groups), groups }));
+}
+
+function sectionTitle(groups: [Group, ...Group[]]): string {
+  if (groups.length === 1) return groups[0].name;
+  if (groups.every((group) => regionOf(group.name))) return 'Regions';
+  if (groups.every((group) => slotOf(group.name))) return 'Slots';
+  return 'Groups';
+}
+
+function slug(text: string): string {
+  return fold(text).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+export function itemsOf(group: Group): Item[] {
+  const items: Item[] = [];
+  const placed = new Set<OptionDef>();
+  const toggles = group.options.filter((def) => def.kind.type === 'toggle' && !def.requires.length);
+  const shared = toggles[0]?.help;
+  const switches = toggles.length >= 3 && toggles.every((def) => def.help === shared) ? toggles : [];
+
+  group.options.forEach((def, index) => {
+    if (placed.has(def)) return;
+    const parts: [OptionDef, ...OptionDef[]][] = [];
+    for (let at = index, part; (part = switchedAt(group.options, at)); at += part.length) parts.push(part);
+    if (parts.length >= 3) {
+      items.push({ kind: 'switched', parts });
+      for (const each of parts.flat()) placed.add(each);
+      return;
+    }
+    if (switches.includes(def)) {
+      items.push({ kind: 'switches', help: shared ?? '', defs: switches });
+      for (const each of switches) placed.add(each);
+      return;
+    }
+    const base = def.kind.type === 'pool' ? withoutRegion(def.label) : null;
+    const defs = group.options.filter(
+      (other) => other.kind.type === 'pool' && !placed.has(other) && withoutRegion(other.label) === base,
+    );
+    if (defs.length > 1) {
+      items.push({ kind: 'regional', defs: defs as [OptionDef, ...OptionDef[]] });
+      for (const each of defs) placed.add(each);
+      return;
+    }
+    items.push({ kind: 'option', def });
+    placed.add(def);
+  });
+  return items;
+}
+
+/** The switch at `index` and the options right after it that only apply while it is on. */
+function switchedAt(options: OptionDef[], index: number): [OptionDef, ...OptionDef[]] | null {
+  const head = options[index];
+  if (head?.kind.type !== 'toggle') return null;
+  let end = index + 1;
+  while (options[end]?.requires.some((req) => req.when === 'on' && req.id === head.id)) end++;
+  return end > index + 1 ? [head, ...options.slice(index + 1, end)] : null;
+}
+
+/** "Species Kitakami trainers may use" and "Species trainers may use" are the same option for two regions. */
+function withoutRegion(label: string): string {
+  const region = regionOf(label);
+  return region ? label.replace(region, '').replace(/\s+/g, ' ').trim() : label;
 }
 
 /** Mirrors `Settings::applies` in options.rs. */

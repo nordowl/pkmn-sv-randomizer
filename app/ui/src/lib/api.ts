@@ -210,8 +210,10 @@ export interface PoolCounts {
 
 // ---- Randomizing ----
 
+/** Scarlet's seeds come first, then Violet's, numbered on from Scarlet's. */
 export interface BatchRequest {
-  count: number;
+  scarlet: number;
+  violet: number;
   prefix: string;
   start_index: number;
   /** null writes into the seed library. */
@@ -219,11 +221,14 @@ export interface BatchRequest {
 }
 
 export interface RandomizeRequest {
+  /** The game a single seed is made for. A batch says how many seeds each game gets instead. */
   edition: Edition;
   settings: Settings;
   /** Empty means a random seed per run. In a batch, a typed seed becomes `<seed>-<index>`. */
   seed: string;
   batch: BatchRequest | null;
+  /** Also packs every seed the run makes into one zip file in this folder. */
+  zip_dir: string | null;
 }
 
 export type SeedStage = 'randomizing' | 'writing' | 'logging';
@@ -233,7 +238,11 @@ export type RandoEvent =
   | { kind: 'seed_started'; position: number; name: string; seed: string }
   | { kind: 'seed_stage'; position: number; stage: SeedStage }
   | { kind: 'seed_done'; position: number; name: string; seed: string; folder: string; warnings: string[]; millis: number }
-  | { kind: 'seed_failed'; position: number; name: string; seed: string; error: string };
+  | { kind: 'seed_failed'; position: number; name: string; seed: string; error: string }
+  | { kind: 'packing'; path: string };
+
+/** The seed folders are kept even when the zip fails. */
+export type Packed = { state: 'done'; path: string } | { state: 'failed'; path: string; error: string };
 
 export interface JobSummary {
   total: number;
@@ -243,6 +252,8 @@ export interface JobSummary {
   folders: string[];
   /** The start index the next batch should default to. */
   next_batch_index: number;
+  /** null when no zip was asked for or no seed was made. */
+  zip: Packed | null;
 }
 
 // ---- Seed library ----

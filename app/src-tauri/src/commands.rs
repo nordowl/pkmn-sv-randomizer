@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::config::AppConfig;
 use crate::describe::{describe_changes as describe, ChangeLine};
 use crate::edition::Edition;
-use crate::games::{PoolCounts, SpeciesEntry};
+use crate::games::{OpenedGame, PoolCounts, SpeciesEntry};
 use crate::job::{self, JobInput, JobSummary, RandoEvent, RandomizeRequest};
 use crate::library::{self, ActivateResult, SeedEntry, SeedRoots, SwitchCheck};
 use crate::settings::{self, Normalized, RegistryInfo};
@@ -107,12 +107,17 @@ pub async fn randomize(
 ) -> Result<JobSummary, String> {
     blocking(app, move |state| {
         let _running = state.begin_job()?;
-        let game = state.game(request.edition)?;
+        let games = request
+            .editions()
+            .into_iter()
+            .map(|edition| state.game(edition))
+            .collect::<Result<Vec<_>, _>>()?;
+        let games: Vec<&OpenedGame> = games.iter().map(AsRef::as_ref).collect();
         let config = state.config();
         let library_dir = SeedRoots::new(&config, &state.dirs.app_data).library;
         let input = JobInput {
             request: &request,
-            game: &game,
+            games: &games,
             registry: &state.registry,
             library_dir: &library_dir,
             next_batch_index: config.next_batch_index,

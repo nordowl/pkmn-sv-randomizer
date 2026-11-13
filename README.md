@@ -19,7 +19,7 @@ It reads everything it needs from your own game dump, writes the result as an Ed
 - **Titans and legendaries.** Titans, the Treasures of Ruin, Area Zero, the DLC story fights and more, with their cutscene models changed to match.
 - **Trainers.** Teams, levels, double battles, held items, Tera types, trainer names and classes.
 - **Tera Raids.** Raid bosses per region and star tier, shininess, Tera types and rewards.
-- **Items and shops.** Field items, Pickup and Let's Go finds, material drops, and shop stock. The Pokémon Center counter keeps its usual items and adds random extras that grow with your gym badges.
+- **Items and shops.** Poké Ball items and sparkling items on the ground (every ball rolls its own item, and TM balls stay TMs), Pickup and Let's Go finds, material drops, and shop stock. The Pokémon Center counter keeps its usual items and adds random extras that grow with your gym badges.
 
 Every run produces a spoiler log. You can also randomize several seeds in one batch, save your settings as files, and share them as short codes.
 

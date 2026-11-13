@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ChangeLine } from '../lib/api';
   import { app } from '../lib/app.svelte';
-  import { batchName, duration, EDITION_NAMES, plural } from '../lib/format';
+  import { batchPlan, batchTotal, duration, EDITION_NAMES, joinPath, plural, zipName } from '../lib/format';
   import { library } from '../lib/library.svelte';
   import { run, STAGE_TEXT, type SeedRow } from '../lib/run.svelte';
   import Dialog from './Dialog.svelte';
@@ -9,8 +9,15 @@
 
   const phase = $derived(run.phase);
   const request = $derived(phase.is === 'closed' ? null : phase.request);
-  const edition = $derived(request ? EDITION_NAMES[request.edition] : '');
-  const total = $derived(request?.batch?.count ?? 1);
+  const plan = $derived(request?.batch ? batchPlan(request.batch) : []);
+  const games = $derived.by(() => {
+    if (!request) return '';
+    const editions = request.batch ? [...new Set(plan.map((seed) => seed.edition))] : [request.edition];
+    return editions.map((edition) => EDITION_NAMES[edition]).join(' and ');
+  });
+  const total = $derived(request?.batch ? batchTotal(request.batch) : 1);
+  const zipFile = $derived(request?.zip_dir ? zipName(request) : null);
+  const packed = $derived(phase.is === 'finished' ? (phase.summary?.zip ?? null) : null);
 
   const grouped = $derived.by(() => {
     if (phase.is !== 'review' || phase.lines.state !== 'ready') return [];
@@ -20,8 +27,8 @@
   });
 
   const title = $derived.by(() => {
-    if (phase.is === 'review') return `Randomize ${edition}`;
-    if (phase.is === 'running') return total > 1 ? `Making ${plural(total, 'seed')}` : `Making your ${edition} seed`;
+    if (phase.is === 'review') return `Randomize ${games}`;
+    if (phase.is === 'running') return total > 1 ? `Making ${plural(total, 'seed')}` : `Making your ${games} seed`;
     if (phase.is === 'finished') {
       if (phase.error && !run.done) return 'The run did not finish';
       if (phase.summary?.cancelled) return `Run cancelled · ${plural(run.done, 'seed')} made`;
@@ -99,10 +106,12 @@
         <div>
           <dt>Batch</dt>
           <dd>
-            {plural(request.batch.count, 'seed')},
-            <span class="mono">{batchName(request.batch.prefix, request.batch.start_index)}</span>{#if request.batch.count > 1}{' to '}<span
-                class="mono">{batchName(request.batch.prefix, request.batch.start_index + request.batch.count - 1)}</span
-              >{/if}
+            {#if request.batch.scarlet && request.batch.violet}
+              {request.batch.scarlet} Scarlet and {request.batch.violet} Violet,
+            {:else}
+              {plural(total, 'seed')},
+            {/if}
+            <span class="mono">{plan[0]?.name}</span>{#if total > 1}{' to '}<span class="mono">{plan.at(-1)?.name}</span>{/if}
           </dd>
         </div>
       {/if}
@@ -112,6 +121,14 @@
           {request.batch?.output_dir ?? 'The seed library'}
         </dd>
       </div>
+      {#if request.zip_dir}
+        <div>
+          <dt>Zip</dt>
+          <dd class="path mono" title={request.zip_dir}>
+            {zipFile ? joinPath(request.zip_dir, zipFile) : `${request.zip_dir}, named after the seed`}
+          </dd>
+        </div>
+      {/if}
     </dl>
 
     <h3 class="section">Changed settings</h3>
@@ -146,11 +163,17 @@
         {run.done} of {run.rows.length} done
         {#if run.failed}<span class="sep">·</span><span class="bad">{run.failed} failed</span>{/if}
         {#if phase.is === 'running' && phase.cancelling}<span class="sep">·</span>Stopping after this seed…{/if}
+        {#if run.packing}<span class="sep">·</span>Packing the zip…{/if}
       </p>
     </div>
 
     {#if phase.is === 'finished' && phase.error}
       <p class="error block">{phase.error}</p>
+    {/if}
+    {#if packed?.state === 'failed'}
+      <p class="error block">The seeds were made, but the zip was not written. {packed.error}</p>
+    {:else if packed?.state === 'done'}
+      <p class="zip-done"><Icon name="check" size={14} stroke={2.4} /><span>Packed into <span class="mono">{packed.path}</span></span></p>
     {/if}
 
     <ol class="rows">
@@ -196,6 +219,11 @@
         {phase.cancelling ? 'Stopping…' : 'Cancel run'}
       </button>
     {:else if phase.is === 'finished'}
+      {#if packed?.state === 'done' && request?.zip_dir}
+        <button class="btn ghost" onclick={() => library.open(request.zip_dir!)}>
+          <Icon name="folder" size={15} />Open zip folder
+        </button>
+      {/if}
       {#if single && singleFolder}
         <button class="btn ghost" onclick={() => library.open(singleFolder)}>
           <Icon name="folder" size={15} />Open folder
@@ -216,6 +244,24 @@
 </Dialog>
 
 <style>
+  .zip-done {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: -4px 0 14px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+  }
+  .zip-done :global(svg) {
+    flex: none;
+    translate: 0 2px;
+    color: var(--ok);
+  }
+  .zip-done .mono {
+    color: var(--text);
+  }
+
   .lead {
     display: grid;
     place-items: center;

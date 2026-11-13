@@ -1,46 +1,82 @@
 <script lang="ts">
+  import type { OptionDef } from '../lib/api';
   import { app } from '../lib/app.svelte';
   import { plural } from '../lib/format';
-  import { changedOn, groupsOf, REGIONS, type Group, type Region } from '../lib/options';
+  import { applies, changedOn, groupsOf, itemsOf, regionOf, sectionsOf, type Item } from '../lib/options';
   import Icon from './Icon.svelte';
   import OptionRow from './OptionRow.svelte';
+  import SwitchCards from './SwitchCards.svelte';
+  import Tabs from './Tabs.svelte';
 
   let { pageId }: { pageId: string } = $props();
 
   const catalog = $derived(app.catalog!);
   const title = $derived(catalog.pageTitle(pageId));
   const options = $derived(catalog.options(pageId));
-  const groups = $derived(groupsOf(options));
-  const regions = $derived(REGIONS.filter((region) => groups.some((group) => group.region === region)));
-  const tabs = $derived<(Region | 'all')[]>(['all', ...regions]);
+  const sections = $derived(sectionsOf(groupsOf(options)));
   const changed = $derived(changedOn(options, app.settings.values, catalog));
 
-  let region = $state<Region | 'all'>('all');
-  const shown = $derived(groups.filter((group) => region === 'all' || group.region === null || group.region === region));
+  /** The open tab of each tabbed section, by section id, and of each tabbed item, by its first option id. */
+  let open = $state<Record<string, number>>({});
 
-  /** Consecutive slot groups render as one section with a tab per slot. */
-  type Block = { kind: 'group'; group: Group } | { kind: 'slots'; groups: [Group, ...Group[]] };
-  const blocks = $derived.by(() => {
-    const out: Block[] = [];
-    for (const group of shown) {
-      const last = out.at(-1);
-      if (group.slot && last?.kind === 'slots') last.groups.push(group);
-      else out.push(group.slot ? { kind: 'slots', groups: [group] } : { kind: 'group', group });
-    }
-    return out;
+  const tab = (label: string, defs: OptionDef[]) => ({
+    label,
+    changed: changedOn(defs, app.settings.values, catalog) > 0,
+    locked: defs.every((def) => !applies(def, app.settings.values)),
   });
-  let slot = $state<string | null>(null);
 
   $effect(() => {
     const target = app.highlight && catalog.byId.get(app.highlight.id);
     if (!target || target.page !== pageId) return;
-    const group = groups.find((g) => g.name === target.group);
-    if (group?.region && region !== 'all' && region !== group.region) region = group.region;
-    if (group?.slot) slot = group.slot;
+    for (const section of sections) {
+      const index = section.groups.findIndex((group) => group.options.includes(target));
+      if (index < 0) continue;
+      open[section.id] = index;
+      for (const item of itemsOf(section.groups[index]!)) {
+        if (item.kind === 'regional' && item.defs.includes(target)) open[item.defs[0].id] = item.defs.indexOf(target);
+        if (item.kind === 'switched') {
+          const part = item.parts.findIndex((defs) => defs.includes(target));
+          if (part >= 0) open[item.parts[0]![0].id] = part;
+        }
+      }
+    }
+  });
+
+  const itemKey = (item: Item) => {
+    switch (item.kind) {
+      case 'option':
+        return item.def.id;
+      case 'switched':
+        return item.parts[0]![0].id;
+      default:
+        return item.defs[0]!.id;
+    }
+  };
+
+  let page: HTMLElement | undefined = $state();
+
+  /** Tells the sidebar which section is under the top edge. */
+  $effect(() => {
+    const scroller = page?.closest('main');
+    if (!scroller) return;
+    const ids = sections.map((section) => section.id);
+    const spy = () => {
+      const line = scroller.getBoundingClientRect().top + 64;
+      const atEnd = scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      let current = ids[0] ?? null;
+      for (const id of ids) {
+        const element = document.getElementById(`section-${id}`);
+        if (element && (atEnd || element.getBoundingClientRect().top <= line)) current = id;
+      }
+      app.section = current;
+    };
+    spy();
+    scroller.addEventListener('scroll', spy, { passive: true });
+    return () => scroller.removeEventListener('scroll', spy);
   });
 </script>
 
-<article class="page">
+<article class="page" bind:this={page}>
   <header>
     <div class="titles">
       <h1>{title}</h1>
@@ -57,16 +93,6 @@
     {/if}
   </header>
 
-  {#if regions.length}
-    <div class="tabs" role="tablist" aria-label="Region">
-      {#each tabs as tab (tab)}
-        <button role="tab" aria-selected={region === tab} onclick={() => (region = tab)}>
-          {tab === 'all' ? 'All regions' : tab}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   {#if !options.length}
     <div class="building">
       <div class="glyph" aria-hidden="true"><Icon name="layers" size={22} /></div>
@@ -74,31 +100,58 @@
       <p>Its options will show up here once they are ready. Until then, randomizing leaves this part of the game as it is.</p>
     </div>
   {:else}
-    {#each blocks as block (block.kind === 'group' ? block.group.name : `slots:${block.groups[0].name}`)}
-      {#if block.kind === 'group'}
-        <section class="group">
-          <h2>{block.group.name}</h2>
-          {#each block.group.options as def (def.id)}
-            <OptionRow {def} />
-          {/each}
-        </section>
-      {:else}
-        {@const active = block.groups.find((g) => g.slot === slot) ?? block.groups[0]}
-        <section class="group">
-          <h2>Slots</h2>
-          <div class="tabs slot-tabs" role="tablist" aria-label="Slots">
-            {#each block.groups as g (g.name)}
-              <button role="tab" aria-selected={g === active} onclick={() => (slot = g.slot)}>
-                {g.slot}
-                {#if changedOn(g.options, app.settings.values, catalog)}<span class="dot" title="Changed from the default"></span>{/if}
-              </button>
-            {/each}
-          </div>
-          {#each active.options as def (def.id)}
-            <OptionRow {def} />
-          {/each}
-        </section>
-      {/if}
+    {#each sections as section (section.id)}
+      {@const index = Math.min(open[section.id] ?? 0, section.groups.length - 1)}
+      <section class="group" id="section-{section.id}">
+        <div class="section-head">
+          <h2>{section.title}</h2>
+          {#if section.groups.length > 1}
+            <Tabs
+              label={section.title}
+              tabs={section.groups.map((group) => tab(group.tab, group.options))}
+              active={index}
+              onselect={(next) => (open[section.id] = next)}
+            />
+          {/if}
+        </div>
+        {#each itemsOf(section.groups[index]!) as item (itemKey(item))}
+          {#if item.kind === 'option'}
+            <OptionRow def={item.def} />
+          {:else if item.kind === 'switches'}
+            <SwitchCards defs={item.defs} help={item.help} />
+          {:else if item.kind === 'switched'}
+            {@const key = itemKey(item)}
+            {@const at = Math.min(open[key] ?? 0, item.parts.length - 1)}
+            <div class="switched">
+              <Tabs
+                label={section.title}
+                tabs={item.parts.map((defs) => tab(defs[0].label, defs))}
+                active={at}
+                onselect={(next) => (open[key] = next)}
+              />
+              {#each item.parts[at]! as def (def.id)}
+                <OptionRow {def} />
+              {/each}
+            </div>
+          {:else}
+            {@const key = itemKey(item)}
+            {@const at = Math.min(open[key] ?? 0, item.defs.length - 1)}
+            {#key item.defs[at]!.id}
+              <OptionRow def={item.defs[at]!}>
+                {#snippet tabs()}
+                  <Tabs
+                    compact
+                    label="Region"
+                    tabs={item.defs.map((def) => tab(regionOf(def.label) ?? 'Paldea', [def]))}
+                    active={at}
+                    onselect={(next) => (open[key] = next)}
+                  />
+                {/snippet}
+              </OptionRow>
+            {/key}
+          {/if}
+        {/each}
+      </section>
     {/each}
   {/if}
 </article>
@@ -113,7 +166,7 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: 16px;
-    margin-bottom: 26px;
+    margin-bottom: 12px;
   }
 
   h1 {
@@ -134,60 +187,23 @@
     color: var(--accent-text);
   }
 
-  .tabs {
-    display: flex;
-    gap: 4px;
-    margin: -8px 0 22px;
-    padding-bottom: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .tabs button {
-    position: relative;
-    height: 36px;
-    padding: 0 12px;
-    color: var(--text-3);
-    font-size: 13.5px;
-    font-weight: 540;
-    transition: color 140ms var(--ease);
-  }
-  .tabs button:hover {
-    color: var(--text);
-  }
-  .tabs button::after {
-    content: '';
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: -1px;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--accent);
-    scale: 0 1;
-    transition: scale 200ms var(--ease);
-  }
-  .tabs button[aria-selected='true'] {
-    color: var(--text);
-  }
-  .tabs button[aria-selected='true']::after {
-    scale: 1 1;
-  }
-
   .group {
-    margin-bottom: 34px;
+    margin-bottom: 20px;
   }
-  .slot-tabs {
-    margin: 2px 0 6px;
+  .section-head {
+    position: sticky;
+    /* Sticks to the edge of the scroll area, not below its padding. */
+    top: calc(-1 * var(--page-top, 0px));
+    z-index: 3;
+    margin: 0 -16px;
+    padding: 16px 16px 0;
+    background: var(--surface);
   }
-  .slot-tabs button {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+  .section-head :global([role='tablist']) {
+    margin-top: 2px;
   }
-  .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
+  .switched {
+    margin-top: 10px;
   }
   .group h2 {
     display: flex;

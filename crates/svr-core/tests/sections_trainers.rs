@@ -88,6 +88,15 @@ const HIDDEN: [&str; 4] = [
     "world/data/item/hiddenItemDataTable_su2/hiddenItemDataTable_su2_array.bin",
     "world/data/item/hiddenItemDataTable_lc/hiddenItemDataTable_lc_array.bin",
 ];
+/// The overworld Poké Ball scenes, Scarlet and Violet versions, which the field items option also writes.
+const BALL_SCENES: [&str; 6] = [
+    "world/scene/parts/field/streaming_event/world_item_/world_item_0.trscn",
+    "world/scene/parts/field/streaming_event/world_item_/world_item_1.trscn",
+    "world/scene/parts/field/streaming_event/su1_world_item_/su1_world_item_0.trscn",
+    "world/scene/parts/field/streaming_event/su1_world_item_/su1_world_item_1.trscn",
+    "world/scene/parts/field/streaming_event/su2_world_item_/su2_world_item_0.trscn",
+    "world/scene/parts/field/streaming_event/su2_world_item_/su2_world_item_1.trscn",
+];
 const PICKUP: &str = "world/data/item/monohiroiItemData/monohiroiItemData_array.bin";
 const LETS_GO: &str = "world/data/item/rummagingItemDataTable/rummagingItemDataTable_array.bin";
 const DROPS: &str = "world/data/item/dropitemdata/dropitemdata_array.bin";
@@ -138,7 +147,7 @@ fn sorted<T: Ord + Clone>(v: &[T]) -> Vec<T> {
 fn economy_defaults_write_none_of_these_tables() {
     let Some(game) = scarlet("economy defaults") else { return };
     let out = run(&game, &settings(&[]), "economy-defaults");
-    let mine = [&HIDDEN[..], &[PICKUP, LETS_GO, DROPS, LINEUPS, ITEMS, AJITO]].concat();
+    let mine = [&HIDDEN[..], &BALL_SCENES[..], &[PICKUP, LETS_GO, DROPS, LINEUPS, ITEMS, AJITO]].concat();
     for path in &mine {
         assert!(!out.files.contains_key(*path), "defaults wrote {path}");
     }
@@ -171,7 +180,7 @@ fn field_items_keep_odds_empty_slots_and_materials() {
         }
         let pool: BTreeSet<i64> = catalog.field(bans, bans).into_iter().map(i64::from).collect();
         for out in two_seeds(&game, &settings(&overrides)) {
-            only_writes(&out, &HIDDEN);
+            only_writes(&out, &[&HIDDEN[..], &BALL_SCENES[..]].concat());
             let output: Vec<Vec<(i64, i64, i64)>> =
                 HIDDEN.iter().map(|p| hidden_slots(&output_table(&game, &out, p))).collect();
             let mut changed = 0;
@@ -652,7 +661,7 @@ fn every_economy_option_together_passes_validation() {
         on("extras.team_star.similar"),
     ]);
     let [out, _] = two_seeds(&game, &s);
-    let mut expected = [&HIDDEN[..], &[PICKUP, LETS_GO, DROPS, LINEUPS, ITEMS, AJITO]].concat();
+    let mut expected = [&HIDDEN[..], &BALL_SCENES[..], &[PICKUP, LETS_GO, DROPS, LINEUPS, ITEMS, AJITO]].concat();
     expected.sort_unstable();
     let written: Vec<&str> = out.files.keys().map(String::as_str).collect();
     assert_eq!(written, expected);

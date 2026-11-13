@@ -317,7 +317,7 @@ fn options() -> Vec<OptionDef> {
             .build(),
     ];
     out.push(
-        Opt::toggle(SAME_AS_RIVALS, Page::Trainers, "Groups", "Use rival settings for all groups", false)
+        Opt::toggle(SAME_AS_RIVALS, Page::Trainers, "All groups", "Use rival settings for all groups", false)
             .help("Every group uses the extra Pokémon, held item, Tera, IV and AI settings of the Rivals group.")
             .sources(&[Sv])
             .build(),

@@ -22,12 +22,18 @@ export type View = { kind: 'page'; id: string } | { kind: 'library' } | { kind: 
 
 export interface BatchForm {
   enabled: boolean;
-  count: number;
+  counts: Record<Edition, number>;
   prefix: string;
   /** null follows the backend's `next_batch_index`. */
   startIndex: number | null;
   /** null writes into the seed library. */
   outputDir: string | null;
+}
+
+export interface ZipForm {
+  enabled: boolean;
+  /** Where the zip goes. Turning the zip on asks for it first, so it is set whenever `enabled` is. */
+  dir: string | null;
 }
 
 export type Loadable<T> = { state: 'loading' } | { state: 'ready'; value: T } | { state: 'failed'; error: string };
@@ -50,6 +56,7 @@ export type Block =
   | { kind: 'game'; status: GameStatus }
   | { kind: 'pool'; def: OptionDef }
   | { kind: 'batch-name' }
+  | { kind: 'batch-empty' }
   | { kind: 'running' };
 
 export function blockReason(block: Block, catalog: Catalog | null): string {
@@ -64,6 +71,8 @@ export function blockReason(block: Block, catalog: Catalog | null): string {
       return `${poolName(block.def, catalog)} has no species left.`;
     case 'batch-name':
       return 'Give the batch a folder name first.';
+    case 'batch-empty':
+      return 'Choose how many seeds the batch makes for each game.';
     case 'running':
       return 'A run is already going.';
   }
@@ -110,15 +119,27 @@ function parseView(raw: unknown, catalog: Catalog): View {
   return { kind: 'page', id: catalog.registry.pages[0]?.id ?? '' };
 }
 
-function parseBatch(raw: unknown): BatchForm {
-  const batch = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof BatchForm, unknown>>;
+function parseBatch(raw: unknown, edition: Edition): BatchForm {
+  const batch = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof BatchForm | 'count', unknown>>;
+  const counts = (batch.counts && typeof batch.counts === 'object' ? batch.counts : null) as Partial<Record<Edition, unknown>> | null;
+  // Before per-game counts, a batch was `count` seeds for the selected game.
+  const fallback = (game: Edition) => (game === edition ? integer(batch.count, 0, 999, 5) : 0);
   return {
     enabled: batch.enabled === true,
-    count: integer(batch.count, 1, 999, 5),
+    counts: {
+      scarlet: integer(counts?.scarlet, 0, 999, counts ? 0 : fallback('scarlet')),
+      violet: integer(counts?.violet, 0, 999, counts ? 0 : fallback('violet')),
+    },
     prefix: typeof batch.prefix === 'string' ? batch.prefix : 'Run ',
     startIndex: typeof batch.startIndex === 'number' ? integer(batch.startIndex, 0, 999_999, 1) : null,
     outputDir: typeof batch.outputDir === 'string' && batch.outputDir ? batch.outputDir : null,
   };
+}
+
+function parseZip(raw: unknown): ZipForm {
+  const zip = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof ZipForm, unknown>>;
+  const dir = typeof zip.dir === 'string' && zip.dir ? zip.dir : null;
+  return { enabled: zip.enabled === true && dir !== null, dir };
 }
 
 function isSettings(raw: unknown): raw is Settings {
@@ -140,13 +161,21 @@ class AppState {
   edition = $state<Edition>('scarlet');
   seed = $state('');
   view = $state.raw<View>({ kind: 'page', id: '' });
-  batch = $state<BatchForm>(parseBatch(null));
+  batch = $state<BatchForm>(parseBatch(null, 'scarlet'));
+  zip = $state<ZipForm>(parseZip(null));
 
   species = $state.raw<Partial<Record<Edition, Loadable<SpeciesEntry[]>>>>({});
   poolCounts = $state.raw<PoolCountState | null>(null);
   highlight = $state.raw<{ id: string; at: number } | null>(null);
+  /** The section of the open options page under its top edge. */
+  section = $state<string | null>(null);
   toasts = $state.raw<Toast[]>([]);
   jobRunning = $state(false);
+
+  /** The games Randomize makes seeds for: the selected one, or each game the batch has seeds for. */
+  runEditions = $derived(
+    this.batch.enabled ? EDITIONS.filter((edition) => this.batch.counts[edition] > 0) : [this.edition],
+  );
 
   gameStatus = $derived(this.statusOf(this.edition));
   gameReady = $derived(this.gameStatus?.state === 'ready');
@@ -175,7 +204,11 @@ class AppState {
   block = $derived.by((): Block | null => {
     if (this.jobRunning) return { kind: 'running' };
     if (!this.env) return this.envError ? { kind: 'env-failed' } : { kind: 'checking' };
-    if (this.gameStatus && !this.gameReady) return { kind: 'game', status: this.gameStatus };
+    if (this.batch.enabled && !this.runEditions.length) return { kind: 'batch-empty' };
+    for (const edition of this.runEditions) {
+      const status = this.statusOf(edition);
+      if (status && status.state !== 'ready') return { kind: 'game', status };
+    }
     if (this.emptyPool) return { kind: 'pool', def: this.emptyPool };
     if (this.batch.enabled && !this.batch.prefix.trim()) return { kind: 'batch-name' };
     return null;
@@ -200,7 +233,8 @@ class AppState {
     this.edition = EDITIONS.find((edition) => edition === stored.edition) ?? 'scarlet';
     this.seed = typeof stored.seed === 'string' ? stored.seed : '';
     this.view = parseView(stored.view, catalog);
-    this.batch = parseBatch(stored.batch);
+    this.batch = parseBatch(stored.batch, this.edition);
+    this.zip = parseZip(stored.zip);
     this.settings = registry.defaults;
     if (isSettings(stored.settings)) {
       try {
@@ -218,7 +252,14 @@ class AppState {
 
   persist(): void {
     if (!this.booted) return;
-    writeStored({ settings: this.settings, seed: this.seed, edition: this.edition, view: this.view, batch: { ...this.batch } });
+    writeStored({
+      settings: this.settings,
+      seed: this.seed,
+      edition: this.edition,
+      view: this.view,
+      batch: { ...this.batch, counts: { ...this.batch.counts } },
+      zip: { ...this.zip },
+    });
   }
 
   async refreshEnv(): Promise<void> {

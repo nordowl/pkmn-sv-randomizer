@@ -1,6 +1,6 @@
-import { api, type ChangeLine, type JobSummary, type RandoEvent, type RandomizeRequest, type SeedStage } from './api';
+import { api, type ChangeLine, type Edition, type JobSummary, type RandoEvent, type RandomizeRequest, type SeedStage } from './api';
 import { app, type Loadable } from './app.svelte';
-import { batchName, EDITION_NAMES, errorText, plural } from './format';
+import { batchPlan, EDITION_NAMES, errorText, plural } from './format';
 import { library } from './library.svelte';
 
 export type RowState =
@@ -12,6 +12,7 @@ export type RowState =
 
 export interface SeedRow {
   position: number;
+  edition: Edition;
   name: string;
   seed: string | null;
   state: RowState;
@@ -41,12 +42,14 @@ function buildRequest(): RandomizeRequest {
     seed: app.seed.trim(),
     batch: batch.enabled
       ? {
-          count: batch.count,
+          scarlet: batch.counts.scarlet,
+          violet: batch.counts.violet,
           prefix: batch.prefix,
           start_index: batch.startIndex ?? app.env?.config.next_batch_index ?? 1,
           output_dir: batch.outputDir,
         }
       : null,
+    zip_dir: app.zip.enabled ? app.zip.dir : null,
   };
 }
 
@@ -55,12 +58,15 @@ function plannedRows(request: RandomizeRequest): SeedRow[] {
   const batch = request.batch;
   if (!batch) {
     const name = typed ? `${EDITION_NAMES[request.edition]} ${typed}` : `New ${EDITION_NAMES[request.edition]} seed`;
-    return [{ position: 0, name, seed: typed || null, state: { is: 'queued' } }];
+    return [{ position: 0, edition: request.edition, name, seed: typed || null, state: { is: 'queued' } }];
   }
-  return Array.from({ length: batch.count }, (_, position) => {
-    const index = batch.start_index + position;
-    return { position, name: batchName(batch.prefix, index), seed: typed ? `${typed}-${index}` : null, state: { is: 'queued' } };
-  });
+  return batchPlan(batch).map(({ edition, index, name }, position) => ({
+    position,
+    edition,
+    name,
+    seed: typed ? `${typed}-${index}` : null,
+    state: { is: 'queued' },
+  }));
 }
 
 class RunState {
@@ -68,6 +74,8 @@ class RunState {
   rows = $state<SeedRow[]>([]);
   /** The sheet can be hidden while a run keeps going. */
   visible = $state(false);
+  /** The zip being written once the seeds are done. */
+  packing = $state<string | null>(null);
 
   progress = $derived.by(() => {
     if (!this.rows.length) return 0;
@@ -101,6 +109,7 @@ class RunState {
     if (this.phase.is !== 'review') return;
     const { request } = this.phase;
     this.rows = plannedRows(request);
+    this.packing = null;
     this.phase = { is: 'running', request, cancelling: false };
     app.jobRunning = true;
     let summary: JobSummary | null = null;
@@ -113,6 +122,7 @@ class RunState {
     for (const row of this.rows) {
       if (row.state.is === 'queued' || row.state.is === 'working') row.state = { is: 'skipped' };
     }
+    this.packing = null;
     this.phase = { is: 'finished', request, summary, error };
     app.jobRunning = false;
     if (request.batch) app.batch.startIndex = null;
@@ -128,14 +138,20 @@ class RunState {
       app.toast({ tone: 'error', title: 'The run stopped', body: error ?? undefined, action: show });
       return;
     }
-    const tone = summary.failed ? 'warning' : 'success';
+    const zipFailed = summary.zip?.state === 'failed';
+    const tone = summary.failed || zipFailed ? 'warning' : 'success';
     const failed = summary.failed ? `, ${summary.failed} failed` : '';
-    app.toast({ tone, title: `${plural(summary.done, 'seed')} made${failed}`, action: show });
+    const body = summary.zip?.state === 'failed' ? `The zip was not written. ${summary.zip.error}` : undefined;
+    app.toast({ tone, title: `${plural(summary.done, 'seed')} made${failed}`, body, action: show });
   }
 
   private apply(event: RandoEvent): void {
     if (event.kind === 'started') {
       if (this.rows.length > event.total) this.rows.length = event.total;
+      return;
+    }
+    if (event.kind === 'packing') {
+      this.packing = event.path;
       return;
     }
     const row = this.rows[event.position];

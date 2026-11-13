@@ -1,6 +1,7 @@
-//! Field items, pickup, Let's Go items and drops.
+//! Field items, Poké Ball items, pickup, Let's Go items and drops.
 
-use crate::data::Names;
+use crate::data::item_balls::{self, Ball};
+use crate::data::{DataError, Names};
 use crate::fb::{FieldError, TableValue};
 use crate::rando::itempool::{ItemCatalog, ItemKind};
 use crate::rando::options::{Opt, OptionDef, Page, Settings, Source};
@@ -38,8 +39,8 @@ const SLOT_MODES: &[(&str, &str, &str)] = &[
 fn options() -> Vec<OptionDef> {
     let page = Page::Items;
     vec![
-        Opt::choice(FIELD, page, "Field items", "Hidden and sparkling items", "unchanged", SLOT_MODES)
-            .help("The items that sparkle on the ground around the map. How likely each spot is to give its item stays the same, and crafting materials found this way are left alone.")
+        Opt::choice(FIELD, page, "Field items", "Items on the ground", "unchanged", SLOT_MODES)
+            .help("Poké Ball items and the items that sparkle on the ground, in Paldea, Kitakami and Blueberry Academy. Every ball gets its own item, and balls that held a TM get a TM. How likely each sparkling spot is to give its item stays the same. Key items and crafting materials are left alone.")
             .sources(&[Source::Upr, Source::Sv])
             .build(),
         Opt::choice(PICKUP, page, "Field items", "Pickup ability items", "unchanged", SLOT_MODES)
@@ -308,10 +309,90 @@ fn run(ctx: &mut Ctx) -> Result<(), RandoError> {
             }
         }
     }
+    if plan.field != Mode::Unchanged {
+        reassign_balls(ctx, &catalog, &catalog.field(plan.ban_bad, plan.ban_money), plan.field)?;
+    }
     if let Some(mode) = plan.drops {
         economy_drops::run(ctx, &catalog, mode)?;
     }
     Ok(())
+}
+
+/// The overworld item scenes per region; each exists as `_0` (Scarlet) and `_1` (Violet).
+const BALL_REGIONS: [(&str, &str); 3] = [("Paldea", ""), ("Kitakami", "su1_"), ("Blueberry", "su2_")];
+
+fn ball_scene(prefix: &str, version: u8) -> String {
+    format!("world/scene/parts/field/streaming_event/{prefix}world_item_/{prefix}world_item_{version}.trscn")
+}
+
+/// Gives every Poké Ball item in the overworld its own item. Balls holding a TM get a TM, and key
+/// items and crafting materials stay. Both versions of a region list the same balls, so they get
+/// the same items.
+fn reassign_balls(ctx: &mut Ctx, catalog: &ItemCatalog, pool: &[u16], mode: Mode) -> Result<(), RandoError> {
+    let tms: Vec<u16> = catalog.all().iter().filter(|i| i.kind == ItemKind::Tm && i.named()).map(|i| i.id).collect();
+    let price = |id: u16| catalog.get(id).map_or(0, |i| i.price);
+    let kind = |id: u16| catalog.get(id).map(|i| i.kind);
+    let mut lines = Vec::new();
+    let (mut total, mut changed) = (0, 0);
+    for (region, prefix) in BALL_REGIONS {
+        let read = |version| -> Result<(String, Vec<u8>, Vec<Ball>), RandoError> {
+            let path = ball_scene(prefix, version);
+            let raw = ctx.game.read(&path).map_err(|e| DataError::Read {
+                path: path.clone(),
+                detail: e.to_string(),
+            })?;
+            let balls = item_balls::find(&raw)?;
+            Ok((path, raw, balls))
+        };
+        let versions = [read(0)?, read(1)?];
+        let balls = &versions[0].2.clone();
+        if versions[1].2.iter().map(|b| (b.item, b.num)).ne(balls.iter().map(|b| (b.item, b.num))) {
+            return Err(RandoError::Section {
+                section: "items",
+                detail: format!("the Scarlet and Violet item balls of {region} differ"),
+            });
+        }
+        let (tm_balls, goods_balls): (Vec<usize>, Vec<usize>) = (0..balls.len())
+            .filter(|&i| !matches!(kind(balls[i].item), None | Some(ItemKind::Key | ItemKind::Material)))
+            .partition(|&i| kind(balls[i].item) == Some(ItemKind::Tm));
+        let stacks = |idx: &[usize]| -> Vec<Stack> { idx.iter().map(|&i| Stack { item: balls[i].item, count: balls[i].num }).collect() };
+        let mut rng = ctx.rng(&format!("{FIELD}.balls.{region}"));
+        let goods = reassign(mode, &stacks(&goods_balls), pool, price, &mut rng);
+        let tm = reassign(mode, &stacks(&tm_balls), &tms, |_| i64::MAX, &mut rng);
+        let assigned: Vec<(usize, Stack)> = goods_balls.into_iter().zip(goods).chain(tm_balls.into_iter().zip(tm)).collect();
+
+        total += assigned.len();
+        for (path, mut raw, version_balls) in versions {
+            for &(i, new) in &assigned {
+                item_balls::write(&mut raw, &version_balls[i], new.item, new.count);
+            }
+            ctx.files.insert(path, raw);
+        }
+        let mut rows: Vec<(usize, Stack)> = assigned.into_iter().filter(|&(i, new)| new != Stack { item: balls[i].item, count: balls[i].num }).collect();
+        rows.sort_by_key(|&(i, _)| i);
+        changed += rows.len();
+        for (i, new) in rows {
+            let was = Stack { item: balls[i].item, count: balls[i].num };
+            lines.push(vec![
+                region.to_owned(),
+                (i + 1).to_string(),
+                ball_label(&ctx.names, was),
+                ball_label(&ctx.names, new),
+            ]);
+        }
+    }
+    let log = ctx.log.section("Poké Ball items");
+    log.note(format!("{changed} of {total} Poké Ball items changed. Balls are numbered in the order the game lists them."));
+    let table = log.table("Poké Ball items", &["Region", "Ball", "Was", "Now"]);
+    for line in lines {
+        table.row(line);
+    }
+    Ok(())
+}
+
+fn ball_label(names: &Names, stack: Stack) -> String {
+    let name = names.item(stack.item);
+    if stack.count == 1 { name } else { format!("{name} x{}", stack.count) }
 }
 
 fn reassign_tables(

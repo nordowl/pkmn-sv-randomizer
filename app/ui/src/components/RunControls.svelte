@@ -1,19 +1,19 @@
 <script lang="ts">
   import { dismissable } from '../lib/actions';
   import { app, blockReason } from '../lib/app.svelte';
-  import { plural, rollSeed } from '../lib/format';
+  import { batchTotal, plural, rollSeed } from '../lib/format';
   import { run } from '../lib/run.svelte';
-  import BatchPanel from './BatchPanel.svelte';
+  import RunOptions from './RunOptions.svelte';
   import Icon from './Icon.svelte';
 
-  let batchOpen = $state(false);
+  let optionsOpen = $state(false);
   /** Digits shown while a rolled seed settles, so the roll reads as a roll. */
   let scramble = $state<string | null>(null);
 
   const running = $derived(run.phase.is === 'running');
   const block = $derived(app.block);
   const blocked = $derived(!!block && !running);
-  const batchCount = $derived(app.batch.enabled ? app.batch.count : 0);
+  const batchCount = $derived(app.batch.enabled ? batchTotal(app.batch.counts) : 0);
   const finished = $derived(run.done + run.failed);
 
   function roll() {
@@ -39,7 +39,7 @@
   }
 
   function press() {
-    batchOpen = false;
+    optionsOpen = false;
     if (running) run.visible = true;
     else run.review();
   }
@@ -75,7 +75,7 @@
     </button>
   </div>
 
-  <div class="go" class:blocked use:dismissable={() => (batchOpen = false)}>
+  <div class="go" class:blocked use:dismissable={() => (optionsOpen = false)}>
     <button class="randomize" disabled={blocked} {title} onclick={press}>
       {#if running}
         <Icon name="spinner" size={16} stroke={2.2} class="spin" />
@@ -88,17 +88,17 @@
     </button>
     <button
       class="more"
-      aria-label="Batch options"
-      title="Batch options"
-      aria-expanded={batchOpen}
+      aria-label="Batch and zip options"
+      title="Batch and zip options"
+      aria-expanded={optionsOpen}
       disabled={running}
-      onclick={() => (batchOpen = !batchOpen)}
+      onclick={() => (optionsOpen = !optionsOpen)}
     >
       <Icon name="chevronDown" size={16} stroke={2} />
     </button>
-    {#if batchOpen}
-      <div class="popover batch-pop">
-        <BatchPanel />
+    {#if optionsOpen}
+      <div class="popover options-pop">
+        <RunOptions />
       </div>
     {/if}
   </div>
@@ -260,9 +260,9 @@
     font-size: 12.5px;
   }
 
-  .batch-pop {
+  .options-pop {
     top: calc(100% + 10px);
     right: 0;
-    width: 380px;
+    width: 440px;
   }
 </style>

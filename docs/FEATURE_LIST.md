@@ -304,6 +304,7 @@ There are 700 rows, with 454 in Paldea, 133 in Kitakami and 113 in Blueberry, ac
 ## 14. Items
 
 - [x] Hidden and sparkling ground items unchanged, shuffled, random or evenly distributed, across all 93 tables. `UPR` `SV` `data`
+- [x] Poké Ball items on the ground, under the same option: all 4,119 balls in Paldea, Kitakami and Blueberry Academy each get their own item. Balls that held a TM get a TM, and key items and crafting materials stay. The balls live in the overworld `world_item` scenes, not in a table, and their items change in place. `New` `data`
 - [x] Pickup ability items. `UPR` `SV` `data`
 - [x] Let's Go auto-battle items. `SV` `data`
 - [x] Pokémon material drops, 580 rows, keeping TMs craftable. The SV reference removes materials and can make TMs impossible to craft. `SV` `data`

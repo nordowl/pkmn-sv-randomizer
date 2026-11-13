@@ -237,3 +237,85 @@ fn scene_pokemon_without_a_form_field_take_an_alternate_form() {
     assert_eq!(scene::swap_species(&again.bytes, &BTreeMap::new()).unwrap().found[&alolan_ninetales], count);
     println!("OK {count} Sprigatito objects became Alolan Vulpix, file grew by {}", patch.bytes.len() - raw.len());
 }
+
+#[test]
+fn overworld_item_balls_parse_completely() {
+    use svr_core::data::item_balls;
+
+    let Some(game) = scarlet("item balls") else { return };
+    let mut store = TableStore::new(&game);
+    let known = svr_core::data::store::game_items(&mut store).unwrap();
+    let names = svr_core::data::Names::load(&game, Language::English).unwrap();
+    for region in ["", "su1_", "su2_"] {
+        for version in [0, 1] {
+            let path = format!("world/scene/parts/field/streaming_event/{region}world_item_/{region}world_item_{version}.trscn");
+            let raw = game.read(&path).unwrap();
+            let balls = item_balls::find(&raw).unwrap();
+            assert!(!balls.is_empty(), "{path} has no balls");
+            assert!(balls.iter().all(|b| known.contains(&b.item)), "{path} holds an unknown item");
+            let stacks = balls.iter().filter(|b| b.num != 1).count();
+            let without_num = balls.iter().filter(|b| b.num_at.is_none()).count();
+            let sample: Vec<String> = balls.iter().take(4).map(|b| format!("{} x{}", names.item(b.item), b.num)).collect();
+            println!("OK {path}: {} balls, {stacks} stacks, {without_num} without num, e.g. {sample:?}", balls.len());
+
+            let mut patched = raw.clone();
+            for b in &balls {
+                item_balls::write(&mut patched, b, 17, 1);
+            }
+            let again = item_balls::find(&patched).unwrap();
+            assert_eq!(again.len(), balls.len());
+            assert!(again.iter().all(|b| b.item == 17 && (b.num_at.is_none() || b.num == 1)));
+            let differing = raw.iter().zip(&patched).filter(|(a, b)| a != b).count();
+            assert!(differing <= balls.len() * 16, "only item and stack values change");
+        }
+    }
+}
+
+#[test]
+fn every_item_ball_rolls_its_own_item() {
+    use std::collections::BTreeMap;
+    use svr_core::data::item_balls;
+    use svr_core::rando::options::OptValue;
+
+    let Some(game) = scarlet("ball items") else { return };
+    let mut ctx = svr_core::rando::Ctx::new(&game, Settings::default(), Seed("catalog".into())).unwrap();
+    let catalog = svr_core::rando::itempool::ItemCatalog::load(&mut ctx).unwrap();
+    use svr_core::rando::itempool::ItemKind;
+    let kind = |id: u16| catalog.get(id).map(|i| i.kind);
+    for mode in ["random", "even", "shuffle"] {
+        let mut settings = Settings::defaults(&rando::registry());
+        settings.set("items.field", OptValue::Text(mode.into()));
+        let out = rando::randomize(&game, &settings, Seed(format!("balls-{mode}"))).unwrap();
+        let again = rando::randomize(&game, &settings, Seed(format!("balls-{mode}"))).unwrap();
+        let mut summary = Vec::new();
+        for prefix in ["", "su1_", "su2_"] {
+            let scene = |v: u8| format!("world/scene/parts/field/streaming_event/{prefix}world_item_/{prefix}world_item_{v}.trscn");
+            let vanilla = item_balls::find(&game.read(&scene(0)).unwrap()).unwrap();
+            let after = item_balls::find(&out.files[&scene(0)]).unwrap();
+            assert_eq!(out.files[&scene(0)], again.files[&scene(0)], "same seed, same balls");
+            let violet = item_balls::find(&out.files[&scene(1)]).unwrap();
+            assert!(after.iter().zip(&violet).all(|(a, b)| (a.item, a.num) == (b.item, b.num)), "Scarlet and Violet match");
+            let (mut goods, mut changed) = (0, 0);
+            let mut counts: BTreeMap<u16, usize> = BTreeMap::new();
+            for (old, new) in vanilla.iter().zip(&after) {
+                match kind(old.item) {
+                    Some(ItemKind::Key | ItemKind::Material) | None => assert_eq!((old.item, old.num), (new.item, new.num), "kept"),
+                    Some(ItemKind::Tm) => assert_eq!(kind(new.item), Some(ItemKind::Tm), "a TM ball holds a TM"),
+                    Some(_) => {
+                        let k = kind(new.item);
+                        assert!(!matches!(k, None | Some(ItemKind::Key | ItemKind::Material | ItemKind::Tm)), "goods ball got {:?}", k);
+                        goods += 1;
+                        changed += usize::from(old.item != new.item);
+                        *counts.entry(new.item).or_default() += 1;
+                    }
+                }
+            }
+            if mode != "shuffle" {
+                assert!(changed * 10 >= goods * 8, "{prefix}: only {changed} of {goods} goods balls changed");
+                assert!(counts.len() * 4 >= goods.min(400), "{prefix}: only {} different items", counts.len());
+            }
+            summary.push(format!("{}{}: {changed}/{goods} goods changed, {} different", if prefix.is_empty() { "paldea" } else { prefix }, "", counts.len()));
+        }
+        println!("OK {mode}: {summary:?}");
+    }
+}
