@@ -239,7 +239,7 @@ There are 1,117 rows.
 
 There are 117 scripted battle entries, and I found scene files on 4.0.0 for every group. Scene edits make this the riskiest section. Each group below gets its own on/off switch and species pool. The SV reference has one switch for all of them and left per-group switches disabled in its UI.
 
-- [x] Titans, 16 entries covering 7 species. `SV` `test`
+- [x] Titans, 16 entries covering 7 species. Klawf's fight is checked in game in both phases. In each second phase, Arven's partner is a Pokémon placed in the Titan's clash scene, and the battle uses it as the partner's model. That scene now shows his randomized partner; before this, the mismatch crashed the game on the first action. `SV` `test`
 - [x] Treasures of Ruin, 4 entries. `SV` `test`
 - [x] Area Zero multi-battles, 11 entries. `SV` `test`
 - [ ] ~~Gimmighoul coin encounters, 13 entries.~~ Dropped after an in-game test. Replacing the chest and roaming Gimmighoul with another species crashed the game's scripts on about half of all save loads, and keeping the Gimmighoul model while changing only the battle would show one Pokémon and fight another. Gimmighoul's battles and objects now stay vanilla, and wild and static spawns never use Gimmighoul either. `SV`
@@ -277,7 +277,7 @@ There are 756 rows, and I skip the test rows. Groups are 471 route trainers, Nem
 - [x] Double battles for all possible trainers, or random singles and doubles. `UPR` `SV` `pkNX` `test`
 - [x] Held items per group, with consumable-only, sensible-only and highest-level-only rules. `UPR` `pkNX` `data`
 - [x] Shiny trainer Pokémon. `UPR` `SV` `pkNX` `data`
-- [x] Allow Tera per group, and random Tera types. `SV` `test`
+- [x] Allow Tera per group, and random Tera types. Partners and trainers in multi battles never Terastallize, as in the game. `SV` `test`
 - [x] Force perfect IVs per group. `SV` `pkNX` `data`
 - [x] Smart AI per group. `SV` `pkNX` `data`
 - [x] Random abilities. `pkNX` `data`

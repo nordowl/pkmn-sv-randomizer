@@ -683,6 +683,7 @@ struct TrMon {
     manual: bool,
     moves: Vec<i64>,
     talent: (i64, i64),
+    rare: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -715,6 +716,7 @@ fn trainer_rows(t: &TableValue) -> Vec<TrRow> {
                     manual: int(p, "wazaType") == 1,
                     moves: (1..=4).map(|m| p.table(&format!("waza{m}")).map_or(0, |w| int(w, "wazaId"))).collect(),
                     talent: (int(p, "talentType"), p.table("talentValue").map_or(0, |t| int(t, "spDef"))),
+                    rare: int(p, "rareType"),
                 })
                 .collect();
             TrRow {
@@ -737,6 +739,27 @@ fn is_test_row(trid: &str) -> bool {
 
 fn dex(game: &GameFiles) -> Dex {
     Dex::load(&mut TableStore::new(game)).unwrap()
+}
+
+/// Multi and partner battles: none of their trainers Terastallizes in the game.
+fn multi(trid: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "botan_multi",
+        "pepper_multi",
+        "pepper_02_01",
+        "brother_kodaigame",
+        "s2_side_brother",
+        "sister_muruchi_01",
+        "sister_muruchi_01_strong",
+        "sister_onitaizi",
+        "sister_onitaizi_strong",
+        "sister_02_02",
+        "s2_side_grandfather",
+        "s2_side_grandmother",
+        "s2_side_villager01",
+        "s2_side_villager02",
+    ];
+    EXACT.contains(&trid) || ["pepper_nusi_", "rival_multi_"].iter().any(|p| trid.starts_with(p))
 }
 
 /// The reference's protective cases, written out independently of the section's own table.
@@ -778,11 +801,13 @@ fn max_team(trid: &str) -> usize {
 }
 
 fn fixed_team(trid: &str) -> bool {
-    trid.starts_with("raid_assist_") || ["professor_A_02", "professor_B_02", "brother_02_02"].contains(&trid)
+    trid.starts_with("raid_assist_")
+        || trid.starts_with("pepper_nusi_")
+        || ["professor_A_02", "professor_B_02", "brother_02_02"].contains(&trid)
 }
 
 fn no_tera(trid: &str) -> bool {
-    max_team(trid) == 1 || fixed_team(trid)
+    max_team(trid) == 1 || fixed_team(trid) || multi(trid)
 }
 
 fn abilities_of(dex: &Dex, mon: &TrMon) -> Vec<u16> {
@@ -1013,6 +1038,51 @@ fn random_trainers_keep_every_protection() {
         println!("{}", log[start..].lines().take(6).collect::<Vec<_>>().join("
 "));
     }
+}
+
+/// Arven's partner in each Titan's second battle, and the clash scene whose object the battle uses
+/// as the partner's model.
+const TITAN_PARTNERS: [(&str, &str); 5] = [
+    ("pepper_nusi_01", "world/scene/parts/field/field_contents/nushi/common/RockClashEvent_/RockClashEvent"),
+    ("pepper_nusi_02", "world/scene/parts/field/field_contents/nushi/hagane/HaganeRockClashEvent_/HaganeRockClashEvent"),
+    ("pepper_nusi_03", "world/scene/parts/field/field_contents/nushi/hiko/HikoRockClashEvent_/HikoRockClashEvent"),
+    ("pepper_nusi_04", "world/scene/parts/field/field_contents/nushi/jimen/JimenRockClashEvent_/JimenRockClashEvent"),
+    ("pepper_nusi_05", "world/scene/parts/field/field_contents/nushi/dragon/DragonRockClashEvent_/DragonRockClashEvent"),
+];
+
+fn scene_shows(bytes: &[u8]) -> BTreeSet<Pokemon> {
+    svr_core::data::scene::swap_species(bytes, &BTreeMap::new()).unwrap().found.into_keys().collect()
+}
+
+#[test]
+fn titan_partner_models_follow_the_new_lead() {
+    let Some(game) = scarlet("titan partners") else { return };
+    let vanilla = trainer_rows(&load_table(&game, TRDATA).unwrap());
+    let mut patched = 0;
+    for out in two_seeds(&game, &chaos()) {
+        let new = trainer_rows(&output_table(&game, &out, TRDATA));
+        for (trid, stem) in TITAN_PARTNERS {
+            let i = vanilla.iter().position(|r| r.trid == trid).unwrap();
+            let (old, lead) = (&vanilla[i].team[0], &new[i].team[0]);
+            assert_eq!(new[i].team.len(), 1, "{trid} gained Pokémon");
+            assert_eq!(lead.rare, old.rare, "{trid} changed shininess");
+            assert!(!new[i].change_gem, "{trid} can Terastallize");
+            for version in 0..2 {
+                let path = format!("{stem}_{version}.trscn");
+                assert!(scene_shows(&game.read(&path).unwrap()).contains(&old.species), "{path} lacks {trid}'s vanilla lead");
+                match out.files.get(&path) {
+                    Some(bytes) => {
+                        let shows = scene_shows(bytes);
+                        assert!(shows.contains(&lead.species) && !shows.contains(&old.species), "{path} shows {shows:?}, not {trid}'s {:?}", lead.species);
+                        patched += 1;
+                    }
+                    None => assert_eq!(lead.species, old.species, "{path} still shows {trid}'s vanilla lead"),
+                }
+            }
+        }
+    }
+    println!("OK {patched} clash scenes show Arven's new Titan partner");
+    assert!(patched >= 10, "only {patched} clash scenes patched over two seeds");
 }
 
 #[test]

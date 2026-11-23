@@ -48,6 +48,9 @@ pub struct Protection {
     pub no_tera: bool,
     /// Must-win fights where a Wonder Guard opponent could be unbeatable.
     pub no_wonder_guard: bool,
+    /// The battle adopts a scene's Pokémon object as the lead's model, so the scene must show the
+    /// lead's species. The team stays one Pokémon, never shiny, as the object is.
+    pub scene_lead: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +151,8 @@ const POST_GAME: &[&str] = &[
     "zinia_*",
 ];
 
-/// Multi battles and partner battles, whose battle type the script decides.
+/// Multi battles and partner battles, whose battle type the script decides. None of these trainers
+/// Terastallizes in the game, and they stay that way.
 const MULTI: &[&str] = &[
     "botan_multi",
     "pepper_multi",
@@ -173,6 +177,16 @@ const LONE: &[&str] = &["rival_01_hono", "rival_01_kusa", "rival_01_mizu", "sist
 
 /// The Paradise Protocol fights and the Terapagos fight.
 const NO_WONDER_GUARD: &[&str] = &["professor_A_02", "professor_B_02", "brother_02_02"];
+
+/// Arven's partner in each Titan's second battle, and the Titan's clash scene, without the version
+/// suffix, whose `frend_partner` object becomes the partner's model in battle.
+pub const TITAN_PARTNERS: [(&str, &str); 5] = [
+    ("pepper_nusi_01", "world/scene/parts/field/field_contents/nushi/common/RockClashEvent_/RockClashEvent.trscn"),
+    ("pepper_nusi_02", "world/scene/parts/field/field_contents/nushi/hagane/HaganeRockClashEvent_/HaganeRockClashEvent.trscn"),
+    ("pepper_nusi_03", "world/scene/parts/field/field_contents/nushi/hiko/HikoRockClashEvent_/HikoRockClashEvent.trscn"),
+    ("pepper_nusi_04", "world/scene/parts/field/field_contents/nushi/jimen/JimenRockClashEvent_/JimenRockClashEvent.trscn"),
+    ("pepper_nusi_05", "world/scene/parts/field/field_contents/nushi/dragon/DragonRockClashEvent_/DragonRockClashEvent.trscn"),
+];
 
 /// Team Star bosses whose sixth slot belongs to the Starmobile.
 const STAR_BOSS_FIRST: &str = "dan_*_boss_01";
@@ -211,6 +225,7 @@ pub fn place(trid: &str) -> Option<Placement> {
     let region = region(trid);
     let mut protection = Protection {
         fixed_battle: any(MULTI, trid) || any(SINGLES, trid) || group == Group::Raid,
+        no_tera: any(MULTI, trid),
         ..Protection::default()
     };
     if group == Group::Raid {
@@ -231,6 +246,10 @@ pub fn place(trid: &str) -> Option<Placement> {
         protection.fixed_team = true;
         protection.no_tera = true;
         protection.no_wonder_guard = true;
+    }
+    if TITAN_PARTNERS.iter().any(|&(id, _)| id == trid) {
+        protection.fixed_team = true;
+        protection.scene_lead = true;
     }
     let post_game = any(POST_GAME, trid);
     let named_character = match group {
@@ -296,6 +315,9 @@ mod tests {
         assert!(p("brother_01_03_strong").fixed_battle);
         assert!(p("sister_onitaizi_strong").fixed_battle);
         assert!(p("brother_02_02").no_wonder_guard && p("professor_B_02").no_wonder_guard);
+        assert!(p("pepper_nusi_05").scene_lead && p("pepper_nusi_05").fixed_team && p("pepper_nusi_05").fixed_battle);
+        assert!(p("pepper_nusi_05").no_tera && p("pepper_multi").no_tera && p("s2_side_villager02").no_tera);
+        assert!(!p("pepper_multi").scene_lead);
         assert!(!p("gym_denki_01").fixed_battle);
         assert!(!place("gym_denki_leader_02").unwrap().main_story);
         assert!(place("gym_denki_leader_01").unwrap().main_story);

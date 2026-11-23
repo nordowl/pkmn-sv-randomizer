@@ -1,7 +1,8 @@
 //! Writes an in-game test seed for Scarlet. With no preset: every toggle on, choices and numbers as
 //! in round 0 of the `every_option_at_once` test, and three alternate-form custom starters revealed
 //! at Nemona's house, so the lineup shows whether scene forms work. With a preset id from the app's
-//! presets.json: that preset, then any `option.id=value` overrides (values are JSON, else text).
+//! presets.json, or the path of a saved settings `.json`: those values, then any `option.id=value`
+//! overrides (values are JSON, else text).
 //!
 //! cargo run -p svr-core --release --example make_seed -- <mod folder> [seed] [preset] [id=value]...
 //! with SVR_TEST_KEYS and SVR_TEST_GAMES set as for the real-game tests.
@@ -26,10 +27,14 @@ fn main() {
     let registry = rando::registry();
     let mut settings = Settings::defaults(&registry);
     if let Some(preset) = args.next() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/src/presets.json");
-        let presets: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let list = presets.get("presets").unwrap_or(&presets).as_array().expect("a preset list");
-        let found = list.iter().find(|p| p["id"] == preset.as_str()).unwrap_or_else(|| panic!("no preset {preset}"));
+        let found: serde_json::Value = if preset.ends_with(".json") {
+            serde_json::from_slice(&std::fs::read(&preset).unwrap()).unwrap()
+        } else {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/src/presets.json");
+            let presets: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let list = presets.get("presets").unwrap_or(&presets).as_array().expect("a preset list");
+            list.iter().find(|p| p["id"] == preset.as_str()).unwrap_or_else(|| panic!("no preset {preset}")).clone()
+        };
         let values = found.get("values").or_else(|| found.get("settings")).and_then(|v| v.as_object()).unwrap();
         for (id, value) in values {
             settings.set(id, serde_json::from_value(value.clone()).unwrap());

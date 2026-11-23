@@ -11,6 +11,7 @@ mod rows;
 #[path = "trainer_text.rs"]
 mod text;
 
+use super::encounter_common as common;
 use groups::{Group, Placement, Region};
 use moves::MoveBook;
 use rows::{Mon, Trainer, TRDATA, TRTYPE};
@@ -929,7 +930,7 @@ impl<'a> Planner<'a> {
                 mon.talent_type = rows::TALENT_VALUE;
                 mon.talent = [PERFECT_IV; 6];
             }
-            if cfg.shiny > 0 && shiny_rng.percent(cfg.shiny) {
+            if cfg.shiny > 0 && !guard.scene_lead && shiny_rng.percent(cfg.shiny) {
                 mon.rare = rows::RARE;
             }
             if cfg.better_moves && (changed || !mon.manual_moves) {
@@ -1089,7 +1090,35 @@ fn run(ctx: &mut Ctx) -> Result<(), RandoError> {
         }
     }
     log_teams(ctx, &vanilla, &planned, &changed, &types)?;
+    partner_models(ctx, &vanilla, &planned)?;
     rename(ctx, &cfg, &vanilla, &types)?;
+    Ok(())
+}
+
+/// Shows each Titan partner's new lead in the clash scene that its battle model comes from.
+fn partner_models(ctx: &mut Ctx, vanilla: &[Trainer], planned: &[Trainer]) -> Result<(), RandoError> {
+    let mut rows = Vec::new();
+    for (trid, scene) in groups::TITAN_PARTNERS {
+        let Some(t) = vanilla.iter().find(|t| t.trid == trid) else { continue };
+        let (Some(old), Some(new)) = (t.team.first(), planned[t.index].team.first()) else { continue };
+        if old.species == new.species {
+            continue;
+        }
+        let map = BTreeMap::from([(old.species, new.species)]);
+        let shows = format!("{} -> {}", ctx.names.pokemon(old.species), ctx.names.pokemon(new.species));
+        let (stem, ext) = scene.rsplit_once('.').expect("scene paths have an extension");
+        for version in 0..2 {
+            let path = format!("{stem}_{version}.{ext}");
+            common::patch_scene(ctx, path.clone(), &map, "trainers")?;
+            rows.push(vec![format!("Arven ({trid})"), path, shows.clone()]);
+        }
+    }
+    if !rows.is_empty() {
+        let table = ctx.log.section("Trainers").table("Titan partner models", &["Trainer", "File", "Shows"]);
+        for row in rows {
+            table.row(row);
+        }
+    }
     Ok(())
 }
 
